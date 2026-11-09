@@ -1,0 +1,94 @@
+namespace MmoProfiler.Core;
+
+/// <summary>Pure functions that mutate a <see cref="Profile"/>. Callers serialise access.</summary>
+public static class ProfileUpdater
+{
+    public const int MaxTopicLength = 40;
+    public const int MaxTopicsPerMessage = 3;
+    public const int MaxTrackedTopics = 50;
+    public const int MaxSummaryLength = 600;
+
+    public static void RecordMessage(Profile p, ChatMessage m)
+    {
+        ArgumentNullException.ThrowIfNull(p);
+        ArgumentNullException.ThrowIfNull(m);
+
+        var ts = m.TimestampUtc;
+
+        // A fresh profile has default timestamps; treat that as "unset" rather than as the earliest value.
+        if (p.MessageCount == 0 || p.FirstSeenUtc == default || ts < p.FirstSeenUtc) p.FirstSeenUtc = ts;
+        if (p.MessageCount == 0 || ts > p.LastSeenUtc) p.LastSeenUtc = ts;
+
+        p.MessageCount++;
+        p.MessagesSinceSummary++;
+        Increment(p.ChannelCounts, m.Channel);
+
+        if (p.ActivityByHourOfWeekUtc is not { Length: Profile.HoursPerWeek })
+        {
+            var resized = new int[Profile.HoursPerWeek];
+            if (p.ActivityByHourOfWeekUtc is not null)
+                Array.Copy(p.ActivityByHourOfWeekUtc, resized, Math.Min(p.ActivityByHourOfWeekUtc.Length, resized.Length));
+            p.ActivityByHourOfWeekUtc = resized;
+        }
+
+        var utc = ts.UtcDateTime;
+        p.ActivityByHourOfWeekUtc[(int)utc.DayOfWeek * 24 + utc.Hour]++;
+    }
+
+    public static void ApplyAnalysis(Profile p, MessageAnalysis a)
+    {
+        ArgumentNullException.ThrowIfNull(p);
+        ArgumentNullException.ThrowIfNull(a);
+
+        if (a.Tone == Tone.Unknown && a.Intent == Intent.Unknown) return;
+
+        p.AnalyzedCount++;
+        Increment(p.ToneCounts, a.Tone);
+        Increment(p.IntentCounts, a.Intent);
+        Increment(p.LanguageCounts, string.IsNullOrWhiteSpace(a.Language) ? "und" : a.Language);
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var raw in a.Topics ?? Array.Empty<string>())
+        {
+            if (seen.Count >= MaxTopicsPerMessage) break;
+            var topic = raw?.Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(topic) || topic.Length > MaxTopicLength) continue;
+            if (seen.Add(topic)) Increment(p.TopicCounts, topic);
+        }
+
+        // Evict lowest counts; ties remove the alphabetically last key first.
+        while (p.TopicCounts.Count > MaxTrackedTopics)
+        {
+            var victim = p.TopicCounts
+                .OrderBy(kv => kv.Value)
+                .ThenByDescending(kv => kv.Key, StringComparer.Ordinal)
+                .First().Key;
+            p.TopicCounts.Remove(victim);
+        }
+    }
+
+    public static void ApplySummary(Profile p, string summary, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(p);
+        if (summary is null) return;
+
+        var cleaned = new string(summary.Where(c => !char.IsControl(c)).ToArray()).Trim();
+        if (cleaned.Length > MaxSummaryLength)
+        {
+            var cut = MaxSummaryLength;
+            if (char.IsHighSurrogate(cleaned[cut - 1])) cut--; // do not split a surrogate pair
+            cleaned = cleaned[..cut];
+        }
+        if (cleaned.Length == 0) return;
+
+        p.Summary = cleaned;
+        p.SummaryUpdatedUtc = now;
+        p.MessagesSinceSummary = 0;
+    }
+
+    private static void Increment<TKey>(Dictionary<TKey, long> dict, TKey key) where TKey : notnull
+    {
+        dict.TryGetValue(key, out var n);
+        dict[key] = n + 1;
+    }
+}
