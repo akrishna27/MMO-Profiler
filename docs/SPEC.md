@@ -179,11 +179,11 @@ public sealed class Profile
 - If both tone and intent are `Unknown`, does nothing.
 - Otherwise increments `AnalyzedCount`, `ToneCounts`, `IntentCounts` and `LanguageCounts`.
 - Topics: trim, lower-case, drop empties and anything over 40 characters, take at most 3 per message, de-duplicate within the message, increment `TopicCounts`.
-- If `TopicCounts` exceeds 50 entries, remove entries with the lowest count until 50 remain. Break ties by removing the alphabetically last key first.
+- If `TopicCounts` exceeds 200 entries, remove entries with the lowest count until 200 remain. Break ties by removing the alphabetically last key first. The cap is far above the ten topics the UI shows so that new topics can still enter a long-lived profile.
 
 `ApplySummary(Profile p, string summary, DateTimeOffset now)`:
 
-- Trims the summary, strips control characters, truncates to 600 characters, sets `Summary` and `SummaryUpdatedUtc`, and resets `MessagesSinceSummary` to 0. An empty result leaves the profile unchanged.
+- Replaces every run of control characters and whitespace (including line breaks) with a single space, trims, truncates to 600 characters, sets `Summary` and `SummaryUpdatedUtc`, and resets `MessagesSinceSummary` to 0. An empty result leaves the profile unchanged.
 
 ### 5.4 Options
 
@@ -515,8 +515,9 @@ xUnit. Use `FakeTimeProvider` for time. Use hand-written fakes: `FakeAnalyzer` (
 - `ApplyAnalysis_Unknown_DoesNothing`
 - `ApplyAnalysis_IncrementsToneIntentLanguage`
 - `ApplyAnalysis_NormalisesAndCapsTopicsPerMessage`
-- `ApplyAnalysis_EvictsLowestTopics_WhenOverFifty`
+- `ApplyAnalysis_EvictsLowestTopics_WhenOverCap`
 - `ApplySummary_TruncatesStripsControlChars_AndResetsCounter`
+- `ApplySummary_ReplacesLineBreaksAndControlCharsWithSingleSpace`
 - `ApplySummary_Empty_LeavesProfileUnchanged`
 
 **ProfilerOptionsTests**

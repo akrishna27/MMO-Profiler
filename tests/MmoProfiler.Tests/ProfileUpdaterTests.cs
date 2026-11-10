@@ -116,27 +116,30 @@ public class ProfileUpdaterTests
     }
 
     [Fact]
-    public void ApplyAnalysis_EvictsLowestTopics_WhenOverFifty()
+    public void ApplyAnalysis_EvictsLowestTopics_WhenOverCap()
     {
+        const int cap = ProfileUpdater.MaxTrackedTopics;
+        Assert.Equal(200, cap);
+
         var p = NewProfile();
-        for (var i = 0; i < 50; i++)
-            p.TopicCounts[$"topic{i:00}"] = 5;
-        p.TopicCounts["topic10"] = 1; // lowest
-        p.TopicCounts["topic20"] = 1; // tied lowest, alphabetically later
+        for (var i = 0; i < cap; i++)
+            p.TopicCounts[$"topic{i:000}"] = 5;
+        p.TopicCounts["topic010"] = 1; // lowest
+        p.TopicCounts["topic020"] = 1; // tied lowest, alphabetically later
 
         ProfileUpdater.ApplyAnalysis(p, Analysis(topics: new[] { "newcomer" }));
 
-        // newcomer (count 1) joins 51st; ties at 1 are topic10, topic20, newcomer -> alphabetically last is topic20.
-        Assert.Equal(50, p.TopicCounts.Count);
-        Assert.False(p.TopicCounts.ContainsKey("topic20"));
-        Assert.True(p.TopicCounts.ContainsKey("topic10"));
+        // newcomer (count 1) is one over the cap; ties at 1 are topic010, topic020, newcomer -> alphabetically last is topic020.
+        Assert.Equal(cap, p.TopicCounts.Count);
+        Assert.False(p.TopicCounts.ContainsKey("topic020"));
+        Assert.True(p.TopicCounts.ContainsKey("topic010"));
         Assert.True(p.TopicCounts.ContainsKey("newcomer"));
 
         ProfileUpdater.ApplyAnalysis(p, Analysis(topics: new[] { "another" }));
 
-        // Now ties at 1 are another, newcomer, topic10 -> topic10 is last alphabetically.
-        Assert.Equal(50, p.TopicCounts.Count);
-        Assert.False(p.TopicCounts.ContainsKey("topic10"));
+        // Now ties at 1 are another, newcomer, topic010 -> topic010 is last alphabetically.
+        Assert.Equal(cap, p.TopicCounts.Count);
+        Assert.False(p.TopicCounts.ContainsKey("topic010"));
         Assert.True(p.TopicCounts.ContainsKey("another"));
         Assert.True(p.TopicCounts.ContainsKey("newcomer"));
     }
@@ -153,10 +156,23 @@ public class ProfileUpdaterTests
 
         Assert.NotNull(p.Summary);
         Assert.Equal(600, p.Summary!.Length);
-        Assert.StartsWith("Hello world" + "aaaa", p.Summary);
+        Assert.StartsWith("Hello world aaaa", p.Summary);
         Assert.DoesNotContain(p.Summary, char.IsControl);
         Assert.Equal(now, p.SummaryUpdatedUtc);
         Assert.Equal(0, p.MessagesSinceSummary);
+    }
+
+    [Theory]
+    [InlineData("Friendly.\nTalks about raids", "Friendly. Talks about raids")]
+    [InlineData("Friendly.\r\n\r\nTalks\tabout   raids\n", "Friendly. Talks about raids")]
+    [InlineData("Hel\u0000lo", "Hel lo")]
+    public void ApplySummary_ReplacesLineBreaksAndControlCharsWithSingleSpace(string raw, string expected)
+    {
+        var p = NewProfile();
+
+        ProfileUpdater.ApplySummary(p, raw, T0);
+
+        Assert.Equal(expected, p.Summary);
     }
 
     [Theory]

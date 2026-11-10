@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace MmoProfiler.Core;
 
 /// <summary>Pure functions that mutate a <see cref="Profile"/>. Callers serialise access.</summary>
@@ -5,7 +7,8 @@ public static class ProfileUpdater
 {
     public const int MaxTopicLength = 40;
     public const int MaxTopicsPerMessage = 3;
-    public const int MaxTrackedTopics = 50;
+    // Well above the ten topics the UI shows, so new interests can still enter a long-lived profile.
+    public const int MaxTrackedTopics = 200;
     public const int MaxSummaryLength = 600;
 
     public static void RecordMessage(Profile p, ChatMessage m)
@@ -72,12 +75,31 @@ public static class ProfileUpdater
         ArgumentNullException.ThrowIfNull(p);
         if (summary is null) return;
 
-        var cleaned = new string(summary.Where(c => !char.IsControl(c)).ToArray()).Trim();
+        // Control characters and whitespace runs (including line breaks) become a single space,
+        // so words on separate lines are not glued together.
+        var sb = new StringBuilder(summary.Length);
+        var pendingSpace = false;
+        foreach (var c in summary)
+        {
+            if (char.IsControl(c) || char.IsWhiteSpace(c))
+            {
+                pendingSpace = sb.Length > 0;
+                continue;
+            }
+            if (pendingSpace)
+            {
+                sb.Append(' ');
+                pendingSpace = false;
+            }
+            sb.Append(c);
+        }
+
+        var cleaned = sb.ToString();
         if (cleaned.Length > MaxSummaryLength)
         {
             var cut = MaxSummaryLength;
             if (char.IsHighSurrogate(cleaned[cut - 1])) cut--; // do not split a surrogate pair
-            cleaned = cleaned[..cut];
+            cleaned = cleaned[..cut].TrimEnd();
         }
         if (cleaned.Length == 0) return;
 
