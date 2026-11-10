@@ -1,13 +1,13 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 2 review fixes applied). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 2 reviewed and closed). Update this file with every change to the codebase.
 
 ## Where things stand
 
 | Milestone | State | Notes |
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
-| 2. Intake, circuit breaker, summary buffer, profile service, engine | Review fixes applied, awaiting check | Commits `23b811b`, `cca8fe7`, plus the fixes commit. 107 tests pass. Not pushed. |
+| 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed | Commits `23b811b` and `61e90cd` (review fixes). 107 tests pass on 15 consecutive runs. |
 | 3. Ollama client and response parser | Not started | |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
@@ -18,17 +18,9 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Have the milestone 2 review fixes checked (see "Milestone 2 review fixes: what was done") before milestone 3.
+1. Start milestone 3 (Ollama client and response parser) with the implementation prompt in `docs/WORKFLOW.md`.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Continue with milestones 3, 4 and 5. None of them needs the game.
-
-## Milestone 2 review fixes: what was done
-
-Remove this section once the fixes have been checked.
-
-1. **Deletes win over in-flight work (D17).** `ProfileService` gained `BeginBatch()` (a `ProfileBatchScope`), `UpdateIfExistsAsync`, a scope-aware `ApplyBatchAsync(changes, scope, ct)` and `AppendToLogAsync(messages, scope, ct)`. The engine runs each cycle inside one scope; the batch save, the raw log and summaries skip deleted characters, and summaries use `UpdateIfExistsAsync` so they cannot create a profile. Buffered text for a character deleted mid-cycle is dropped.
-2. **`LastError` is no longer sticky.** It is cleared at the end of any cycle that finishes with the breaker closed and no analyser or summariser failure. `RunCycleAsync` now records an exception in `LastError` before rethrowing, so storage errors are visible and clearable too.
-3. **In-flight tests.** `FakeAnalyzer` and `FakeSummarizer` can block on a `TaskCompletionSource` and signal `Entered`. Nine new tests (3 service, 6 engine) use them. Mutating the delete check made two of them fail, so they do detect the bug.
 
 ## Before milestone 6
 
@@ -40,6 +32,10 @@ Remove this section once the fixes have been checked.
 
 Minor points that were noted and deliberately left:
 
+- A profile deleted and then recreated by `SetNotesAsync` while its summary call is still in flight would receive the old summary, because `UpdateIfExistsAsync` does not check the batch scope. The window is a few seconds for one profile. Close it by checking the scope under the lock if `ProfileService` is next touched.
+- Messages still waiting in the intake queue when a profile is deleted are processed by the next cycle and recreate it, as if the character had just spoken. Accepted for now; Delete All could also empty the queue.
+- If `DisposeAsync` gives up on a stuck cycle after 2 seconds, that cycle can still finish later and write to the store. In milestone 6 the plugin must tolerate a store call after the database is closed.
+- `Dispose_InFlightCycleIgnoringCancellation_ReturnsAfterTwoSeconds` asserts the wait is under 3 fake seconds while stepping fake time against real scheduling. It has not failed, but if it ever flakes on a loaded machine, widen that upper bound.
 - `Normalize_ClampsOutOfRangeValues` checks several values with "at least 1" instead of the exact bound. Tighten when next touching `ProfilerOptionsTests`.
 - `FirstSeenUtc` and `LastSeenUtc` keep the offset the message carried. They compare correctly. The storage layer must normalise to UTC in milestone 4, as the spec says.
 - `CharacterKey` has a public constructor that skips the trimming done by `CharacterKey.Create`. Storage will need the constructor; always use `Create` in application code.
