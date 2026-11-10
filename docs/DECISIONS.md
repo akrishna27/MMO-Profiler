@@ -146,3 +146,12 @@ The user then chose to skip the official repository.
 
 **Why.** The spec was silent, or in tension with rule 8 (timers need a `TimeProvider`). Each is the smallest reading that keeps the listed tests meaningful.
 
+## D19. Set the context window explicitly and budget prompts by characters (2026-11-09)
+
+**Decision.** Every Ollama request sets `options.num_ctx` from `OllamaContextTokens` (default 8192). Classification chunks close at 20 messages or 4000 characters of text, whichever comes first. Summary input is limited to the newest messages within 6000 characters.
+
+**Why.** Measured in the smoke test against Ollama 0.40.15 with `llama3.2:3b` on an RTX 4070 (12 GB). The server chose a default window of 4096 tokens from the machine's VRAM ("vram-based default context"), so machines with less VRAM may get less. A 6054-token prompt was cut to 2050 tokens, the start of the text was lost, and the reply was still HTTP 200 with `done_reason: stop`; the only trace was a warning in the server log. A full chunk of 20 messages at 500 characters each fitted in 4096 tokens with English text, but text that tokenises badly (Japanese is roughly one token per character) would not.
+
+**Sizing.** Worst case for classification is about 4000 prompt tokens of chat text plus about 400 for the instructions and schema and about 800 for the reply, which fits in 8192. Typical chat (around 60 characters a message) is unaffected by the character budget.
+
+**Revisit if** the model evaluation picks a model with a smaller trained context, or if 8192 costs too much VRAM alongside the game.

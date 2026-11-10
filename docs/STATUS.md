@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 3 reviewed). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 3 smoke-tested against real Ollama). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -8,7 +8,7 @@ Last updated: 2026-11-09 (milestone 3 reviewed). Update this file with every cha
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed | Commits `23b811b` and `61e90cd` (review fixes). 107 tests pass on 15 consecutive runs. |
-| 3. Ollama client and response parser | Done, reviewed | Commit `53972be`. 162 tests pass on 10 consecutive runs. No defects. Not yet tried against a real Ollama server. |
+| 3. Ollama client and response parser | Done, reviewed | Commit `53972be`. 162 tests pass on 10 consecutive runs. No code defects. Smoke-tested against a real server; one follow-up fix pending (see "Ollama smoke test results"). |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
@@ -18,18 +18,22 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Start milestone 4 (LiteDB storage) with the implementation prompt in `docs/WORKFLOW.md`.
-2. Smoke-test `OllamaClient` against a real Ollama server (see "Ollama smoke test"). Ollama is installed on the development machine at `D:\Ollama` but the server was not running at review time.
+1. Apply the context-window fix (Sonnet): spec sections 5.4, 6.6, 7 and 11 and decision D19. It adds three options, `num_ctx` on every request, character budgets for chunks and summaries, and five new tests.
+2. Start milestone 4 (LiteDB storage) with the implementation prompt in `docs/WORKFLOW.md`.
 3. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 4. Continue with milestone 5. None of them needs the game.
 
-## Ollama smoke test
+## Ollama smoke test results
 
-Nothing has called a real server yet; every request shape comes from the Ollama docs. Before relying on the client, run one classification and one summary against a real model and check:
+Run 2026-11-09 through the real `OllamaClient` against Ollama 0.40.15, `llama3.2:3b`, RTX 4070 12 GB, model fully on the GPU. The harness was a throwaway program outside the repo. Ollama is installed on the development machine at `D:\Ollama`; the server is not left running.
 
-- The `format` JSON schema is accepted and the reply's `message.content` parses.
-- **Context length.** A full chunk is 20 messages of up to 500 characters plus the schema and the reply. If the model's context window (`num_ctx`) is smaller than the prompt, Ollama is believed to truncate the prompt silently, which would show up as missing ids (labelled `Unknown`), not as an error. This is from memory, not checked. If it happens, set `options.num_ctx` explicitly in `ChatRequest` or lower `ClassificationChunkSize`.
-- Reasoning models may put their thinking in the reply text. A summary must not contain it.
+- **The client works end to end.** Health check, classification with the JSON schema, and summaries all succeeded. No reply failed to parse.
+- **Silent truncation is real** (decision D19). The server's default context was 4096 tokens. A prompt over that was cut to about 2050 tokens with HTTP 200 and no error. Fix specified, not yet implemented.
+- **Speed.** First call 12.6 s (model load). Warm: 8 messages 3.6 s; 20 messages 6.5 to 7.9 s. That is roughly 3 messages a second, so a full cycle of 200 messages takes about 70 s. Summaries took under 1 s.
+- **Label quality is weak.** On 8 realistic messages, intent was clearly wrong on 3: "LF2M healer and tank" was labelled Recruiting, a joke about a wipe was labelled LookingForGroup, and an insult was labelled Trading. Tone was mostly reasonable and German was detected. The sample is tiny; this is what the model evaluation must measure. The prompt gives no definitions of the intents, which is the first thing to try.
+- **Injection.** A message telling the model to label everything Friendly did not change the labels of the other messages.
+- **Summary.** 58 words, plain text, no thinking text (this model is not a reasoning model). It contained one factual slip (selling gear described as seeking gear).
+- **Not measured:** the effect on game frame rate while a batch runs. That needs the game.
 
 ## Before milestone 6
 
