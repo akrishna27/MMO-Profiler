@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-10 (milestone 5c implemented and folded into the spec; waiting for review and the real-Ollama re-probe). Update this file with every change to the codebase.
+Last updated: 2026-11-10 (milestones 1 to 5c reviewed; next is planning the rest of the model evaluation). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -12,7 +12,7 @@ Last updated: 2026-11-10 (milestone 5c implemented and folded into the spec; wai
 | 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Done, reviewed | Commit `16d5571` plus the name-length fix (D23). Chat codes independently re-checked against Dalamud `master` in review: all match (D22). 277 tests pass on 10 consecutive runs. |
 | 5b. Label redesign | Done, reviewed; superseded in part by 5c | Decisions D24 and D25. Labels are data (`Labels/default-labels.json` embedded in Core, optional `labels.json` override via `LabelSetLoader`); up to two intents and tones per message with confidence; emoticon-only messages labelled from a table with no model call. Spec section 15 is folded into 5.5, 6.6, 7.1, 8, 9.3 and 11. 360 tests pass (277 before), 6 consecutive runs. Must be reviewed before the model evaluation. |
-| 5c. Plain lists, reactions by code, flags | Implemented, not yet reviewed | Decisions D26 and D27. Plain label lists (confidence off by default, option `IncludeLabelConfidence`), reaction intent assigned only by code with a normal form for emoticons, flags (`Adult`). Spec section 15 is folded into 5.1 to 5.5, 6.6, 7.1, 8, 9.3 and 11. 416 tests pass (360 before). Must be reviewed and re-probed against real Ollama before the evaluation tool is built. |
+| 5c. Plain lists, reactions by code, flags | Done, reviewed | Commit `2b23e80`. Decisions D26 and D27. 416 tests pass on 10 consecutive runs. Re-probed against real Ollama: see "Label design probes". |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | CI done; README not started | `.github/workflows/ci.yml` runs `dotnet test tests/MmoProfiler.Tests` on `windows-latest` for every push to `main` and every pull request. |
 
@@ -20,7 +20,7 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Review milestone 5c (done in code, see "Milestone 5c implementation notes"). Then re-run the real-Ollama probe: the time for 20 messages should return to roughly 7 to 8 seconds, and no ordinary sentence should come back as a reaction. Also check whether `llama3.2:3b` ever sets the `Adult` flag on invented explicit examples (use invented text, not the real logs).
+1. Plan the rest of the model evaluation with the user: the evaluation tool, the candidate models and the pass bar. The label design is now settled enough to build the tool on. The evaluation has a list of specific questions to answer; see "Questions for the evaluation".
 2. Model evaluation, planned with the user in steps. Step 1 (label definitions) is done (spec section 5.5.1). Step 2 (the test set) is planned; see "Evaluation test set". Still to plan: the evaluation tool, the candidate models and the pass bar. The evaluation must also answer two questions from D24: is the model's confidence meaningful, and how much slower are two labels than one.
 3. Milestone 6 stays blocked on the items under "Before milestone 6".
 
@@ -33,7 +33,9 @@ Implemented 2026-11-10. `dotnet test`: 416 passed, 0 failed, 0 skipped (360 befo
 - Not changed: the engine itself. It already handled a reaction result with an empty tone list; only `MatchReaction` changed.
 - The Dalamud project does not exist yet, so nothing there needed changing.
 
-## Milestone 5b review
+## Label design probes
+
+### Milestone 5b probe
 
 Reviewed 2026-11-10. Commit `0771c39`.
 
@@ -60,6 +62,36 @@ Change agreed with the user on 2026-11-10 (decision D26, spec section 15), with 
 - The model returns plain lists of label ids, strongest first, with no confidence: `"intents": ["LookingForGroup"]`. The schema sets `minItems: 1` and `maxItems` to the option value. The parser keeps the first N that resolve.
 - Confidence becomes an option that is off by default (`IncludeLabelConfidence`), so the evaluation can still try it on other models. The parser accepts both forms.
 - `Reaction` is not offered to the model. It is assigned only by code: from the emoticon table, or when a message contains no letters or digits at all.
+
+### Milestone 5c review and probe
+
+Reviewed 2026-11-10. Commit `2b23e80`. The implementation matches spec section 15 (now folded in). All 26 tests named for it exist; 416 tests pass on 10 consecutive runs, none skipped. No label, flag or emoticon text appears in C# outside the tests. The one test name that disappeared was replaced as instructed. The readings in D27 are accepted.
+
+Same probe as for 5b: 20 invented messages, one chunk, `llama3.2:3b`, RTX 4070.
+
+| Variant | Time | Reply tokens |
+|---|---|---|
+| Plain lists, up to 2 intents and 2 tones (the default) | 6.5 s | 754 |
+| Plain lists, 1 and 1 | 21.5 s | 822 |
+| Confidence on, 2 and 2 | 12.9 s | 1531 |
+
+- **The speed is back.** The default takes 6.5 s, the same as before the label redesign, and less than half the reply length of the confidence form.
+- **The 21.5 s figure for single-label mode is unexplained.** It was one run, straight after a change of schema, and produced only slightly more tokens. It should not be read as "one label is slower". Timing needs repeated runs, which is a job for the evaluation tool.
+- **Reactions work as designed.** The model never returned the reaction intent. `:)))`, `xDDD`, `looool`, `ughhh` and `!!!!` matched the table through the normal form; `>.>` became a reaction with no tone; `>w<`, `ok` and `:3 hello` went to the model.
+- **The second tone is filler.** With a maximum of two, the model gave exactly two tones for every message, and the second was `Neutral` 20 times out of 20. The instruction to add a second label only when it clearly applies was ignored for tones. Left as it is, every profile would show Neutral at 100%. Intents did not show this (1.05 on average).
+- **`Other` replaced `Reaction` as the dumping ground.** Messages 12 to 19 of the chunk were all labelled `Other`, including ones that are plainly Socializing. Labels are still worse late in a chunk.
+- **The `Adult` flag fired once, wrongly**, on a message looking for raid members.
+- **Language is unreliable.** A German message was labelled `en` in the default run.
+
+### Questions for the evaluation
+
+1. Should the defaults be one intent and one tone? On this model a second tone is always `Neutral`. Either the default drops to one, or the prompt and schema must stop the padding (for example a minimum of one with a maximum of two only for intents).
+2. Does accuracy fall with position in the chunk, and what chunk size balances accuracy against time?
+3. Is `Other` over-used, and do sharper definitions or examples fix it?
+4. How reliable is the `Adult` flag (false positives and misses), and does explicit content degrade the other labels?
+5. How reliable is language detection? If it is poor on every small model, detect language in code instead.
+6. Time per chunk, measured over repeated runs, for each model and for one label against two.
+7. Is confidence informative on any candidate model? It was not on `llama3.2:3b`.
 
 ## Evaluation test set
 
