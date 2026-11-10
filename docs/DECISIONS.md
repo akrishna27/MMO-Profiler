@@ -132,3 +132,5 @@ The user then chose to skip the official repository.
 **Why.** Found in the milestone 2 review. The original spec did not say what a delete during a cycle should do, and the implementation recreated the profile (and, with raw storage on, logged the batch's messages) after the user had deleted it. For a tool that stores other people's chat, a delete that does not stick is not acceptable.
 
 **Alternatives rejected.** A global counter with per-key tombstones grows without bound. Holding the mutation lock for the whole cycle would block the UI's note edits and deletes for as long as the model takes.
+
+**Implementation note (2026-11-09).** The raw log write goes through `ProfileService.AppendToLogAsync`, which holds the mutation lock while it checks the scope, instead of the engine checking `IsDeleted` and then calling the log itself. That closes the gap between the check and the write.

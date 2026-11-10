@@ -1,13 +1,13 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 2 committed). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 2 review fixes applied). Update this file with every change to the codebase.
 
 ## Where things stand
 
 | Milestone | State | Notes |
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
-| 2. Intake, circuit breaker, summary buffer, profile service, engine | Reviewed; fixes pending | Commit `23b811b` plus a docs follow-up. 98 tests pass. Not pushed. See "Milestone 2 review fixes". |
+| 2. Intake, circuit breaker, summary buffer, profile service, engine | Review fixes applied, awaiting check | Commits `23b811b`, `cca8fe7`, plus the fixes commit. 107 tests pass. Not pushed. |
 | 3. Ollama client and response parser | Not started | |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
@@ -18,17 +18,17 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Apply the milestone 2 review fixes below (Sonnet), then have them checked before milestone 3.
+1. Have the milestone 2 review fixes checked (see "Milestone 2 review fixes: what was done") before milestone 3.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Continue with milestones 3, 4 and 5. None of them needs the game.
 
-## Milestone 2 review fixes
+## Milestone 2 review fixes: what was done
 
-Reviewed 2026-11-09. The milestone matched the spec, all 38 required tests existed, and 98 tests passed on eight consecutive runs. The spec has been updated for the items below (sections 6.5, 6.6 and 11); the code has not. Remove this section once they are done and checked.
+Remove this section once the fixes have been checked.
 
-1. **Deleted data can come back.** A profile deleted (or Delete All used) while a cycle is in flight is recreated by the batch save in `ProfilerEngine.RunCycleCoreAsync` and by the summary write in `SummariseAsync`, because `ProfileService` creates a missing profile. With raw storage on, the batch's messages are also logged after the delete. Cause: a gap in the spec. Fix: the batch scope and `UpdateIfExistsAsync` now described in spec section 6.5, used by the engine as described in 6.6 (decision D17).
-2. **`LastError` is sticky.** Only errors starting with "Analyzer:" are ever cleared, so a summary or storage error stays on the status line after recovery. Cause: the code. Fix: clear it after any clean cycle with the breaker closed (spec section 6.6).
-3. **No test holds a cycle in flight.** The fakes return instantly, so the 2 second disposal cap and deletes during a cycle are untested. Fix: blocking fakes and the nine new tests named in spec section 11.
+1. **Deletes win over in-flight work (D17).** `ProfileService` gained `BeginBatch()` (a `ProfileBatchScope`), `UpdateIfExistsAsync`, a scope-aware `ApplyBatchAsync(changes, scope, ct)` and `AppendToLogAsync(messages, scope, ct)`. The engine runs each cycle inside one scope; the batch save, the raw log and summaries skip deleted characters, and summaries use `UpdateIfExistsAsync` so they cannot create a profile. Buffered text for a character deleted mid-cycle is dropped.
+2. **`LastError` is no longer sticky.** It is cleared at the end of any cycle that finishes with the breaker closed and no analyser or summariser failure. `RunCycleAsync` now records an exception in `LastError` before rethrowing, so storage errors are visible and clearable too.
+3. **In-flight tests.** `FakeAnalyzer` and `FakeSummarizer` can block on a `TaskCompletionSource` and signal `Entered`. Nine new tests (3 service, 6 engine) use them. Mutating the delete check made two of them fail, so they do detect the bug.
 
 ## Before milestone 6
 

@@ -16,7 +16,16 @@ public sealed class FakeAnalyzer : IMessageAnalyzer
 
     public List<IReadOnlyList<ChatMessage>> Calls { get; } = new();
 
-    public Task<IReadOnlyList<MessageAnalysis>> AnalyzeAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+    /// <summary>Completed when the first call has started. Lets a test wait until a cycle is mid-call.</summary>
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>When set, every call waits for this to complete before it returns. The test releases it.</summary>
+    public TaskCompletionSource? Blocker { get; set; }
+
+    /// <summary>If true the blocked call stops waiting when its token is cancelled; by default it ignores cancellation.</summary>
+    public bool ObserveCancellation { get; set; }
+
+    public async Task<IReadOnlyList<MessageAnalysis>> AnalyzeAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         int n;
@@ -25,7 +34,13 @@ public sealed class FakeAnalyzer : IMessageAnalyzer
             Calls.Add(messages.ToList());
             n = Calls.Count;
         }
-        return Task.FromResult(Handler(n, messages));
+        Entered.TrySetResult();
+        if (Blocker is { } blocker)
+        {
+            if (ObserveCancellation) await blocker.Task.WaitAsync(ct).ConfigureAwait(false);
+            else await blocker.Task.ConfigureAwait(false);
+        }
+        return Handler(n, messages);
     }
 
     public static Func<int, IReadOnlyList<ChatMessage>, IReadOnlyList<MessageAnalysis>> AlwaysThrow() =>
@@ -38,10 +53,18 @@ public sealed class FakeSummarizer : IProfileSummarizer
 
     public List<SummaryRequest> Requests { get; } = new();
 
-    public Task<string> SummarizeAsync(SummaryRequest request, CancellationToken ct)
+    /// <summary>Completed when the first request has started.</summary>
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>When set, every request waits for this to complete before it returns. The test releases it.</summary>
+    public TaskCompletionSource? Blocker { get; set; }
+
+    public async Task<string> SummarizeAsync(SummaryRequest request, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Requests.Add(request);
-        return Task.FromResult(Handler(request));
+        Entered.TrySetResult();
+        if (Blocker is { } blocker) await blocker.Task.ConfigureAwait(false);
+        return Handler(request);
     }
 }

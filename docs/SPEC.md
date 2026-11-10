@@ -311,7 +311,8 @@ Owns the store, the optional message log and the mutation lock.
 - `BeginBatch()` returns a disposable batch scope. The engine opens one at the start of each cycle and disposes it at the end.
 - While a scope is open, `DeleteAsync(key)` records the key in it and `DeleteAllAsync()` marks the whole scope invalidated.
 - `ApplyBatchAsync(changes, scope, ct)` skips every key deleted in that scope, and skips everything when the scope is invalidated.
-- The scope exposes `IsDeleted(key)` so the engine can apply the same rule to the raw message log and to summaries.
+- The scope exposes `IsDeleted(key)` and `IsInvalidated` so the engine can apply the same rule to summaries.
+- `AppendToLogAsync(messages, scope, ct)` appends to the message log under the same lock, skipping deleted keys (and everything if the scope is invalidated). The engine uses it for the raw message log so a delete cannot slip in between the check and the write.
 
 ### 6.6 `ProfilerEngine`
 
@@ -344,6 +345,8 @@ One cycle:
 6. Summaries: among the profiles touched this cycle with `MessagesSinceSummary >= SummaryThreshold`, take up to `MaxSummariesPerCycle` ordered by `MessagesSinceSummary` descending. If the breaker is closed, call the summariser for each with the previous summary and the buffered messages, then `ApplySummary` and clear that character's buffer. Failures count against the breaker and stop further summaries this cycle.
 
 Deletes during a cycle: the whole cycle runs inside one `ProfileService` batch scope (section 6.5). A character deleted while the cycle is in flight gets no profile write, no raw-log entry and no summary from that cycle. Summary writes use `UpdateIfExistsAsync`, so a summary can never create a profile.
+
+`RunCycleAsync` itself records an exception in `Status.LastError` before rethrowing it, so a direct call and the background loop behave the same.
 
 `Status.LastError` is cleared at the end of any cycle that completes with the circuit breaker closed and no analyser, summariser or storage failure. It is not limited to analyser errors.
 

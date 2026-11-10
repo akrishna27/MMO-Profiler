@@ -118,6 +118,11 @@ public sealed class ProfilerEngine : IAsyncDisposable
         {
             await RunCycleCoreAsync(ct).ConfigureAwait(false);
         }
+        catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+        {
+            SetError(ex.Message);
+            throw;
+        }
         finally
         {
             _cycleGate.Release();
@@ -127,6 +132,10 @@ public sealed class ProfilerEngine : IAsyncDisposable
     private async Task RunCycleCoreAsync(CancellationToken ct)
     {
         var o = _options();
+
+        // Deletes made while this cycle is in flight are recorded here and always win over its writes.
+        using var scope = _profiles.BeginBatch();
+        var failed = false;
 
         // 1. Drain.
         var batch = new List<ChatMessage>();
@@ -169,6 +178,7 @@ public sealed class ProfilerEngine : IAsyncDisposable
                 {
                     _breaker.RecordFailure();
                     SetAnalyzerAvailable(false);
+                    failed = true;
                     SetError("Analyzer: " + ex.Message);
                     _log?.Invoke("Message analysis failed; skipping the rest of this cycle's chunks.", ex);
                     break; // skipped messages are not retried
@@ -197,13 +207,21 @@ public sealed class ProfilerEngine : IAsyncDisposable
                 foreach (var a in actions) a(p);
             };
         }
-        await _profiles.ApplyBatchAsync(combined, ct).ConfigureAwait(false);
+        await _profiles.ApplyBatchAsync(combined, scope, ct).ConfigureAwait(false);
+
+        // A delete that raced with step 2 must not leave buffered text behind.
+        foreach (var key in perProfile.Keys)
+        {
+            if (scope.IsDeleted(key)) _profiles.Pending.Remove(key);
+        }
 
         // 5. Optional raw message log and hourly retention purge.
         var now = _time.GetUtcNow();
         if (o.StoreRawMessages && _profiles.MessageLog is { } log)
         {
-            log.Append(batch.Select((m, i) => new LoggedMessage(m, analyses[i])).ToList());
+            await _profiles
+                .AppendToLogAsync(batch.Select((m, i) => new LoggedMessage(m, analyses[i])).ToList(), scope, ct)
+                .ConfigureAwait(false);
 
             if (_lastPurgeUtc is null || now - _lastPurgeUtc.Value >= PurgeInterval)
             {
@@ -220,22 +238,25 @@ public sealed class ProfilerEngine : IAsyncDisposable
         }
 
         // 6. Summaries.
-        await SummariseAsync(perProfile.Keys, o, ct).ConfigureAwait(false);
+        if (!await SummariseAsync(perProfile.Keys, scope, o, ct).ConfigureAwait(false)) failed = true;
 
-        lock (_statusGate)
+        // A clean cycle with the breaker closed clears the error, whatever its source.
+        if (!failed && !_breaker.IsOpen)
         {
-            if (_analyzerAvailable && _lastError is not null && _lastError.StartsWith("Analyzer:", StringComparison.Ordinal))
-                _lastError = null;
+            lock (_statusGate) _lastError = null;
         }
     }
 
-    private async Task SummariseAsync(IEnumerable<CharacterKey> touched, ProfilerOptions o, CancellationToken ct)
+    /// <summary>Returns false if a summary failed.</summary>
+    private async Task<bool> SummariseAsync(
+        IEnumerable<CharacterKey> touched, ProfileBatchScope scope, ProfilerOptions o, CancellationToken ct)
     {
-        if (_breaker.IsOpen) return;
+        if (_breaker.IsOpen) return true;
 
         var due = new List<Profile>();
         foreach (var key in touched)
         {
+            if (scope.IsDeleted(key)) continue;
             var profile = _profiles.Get(key);
             if (profile is not null && profile.MessagesSinceSummary >= o.SummaryThreshold) due.Add(profile);
         }
@@ -244,6 +265,7 @@ public sealed class ProfilerEngine : IAsyncDisposable
                      .OrderByDescending(p => p.MessagesSinceSummary)
                      .Take(Math.Max(0, o.MaxSummariesPerCycle)))
         {
+            if (scope.IsDeleted(profile.Key)) continue;
             var recent = _profiles.Pending.Take(profile.Key);
             string text;
             try
@@ -262,15 +284,17 @@ public sealed class ProfilerEngine : IAsyncDisposable
                 SetAnalyzerAvailable(false);
                 SetError("Summariser: " + ex.Message);
                 _log?.Invoke("Summary generation failed; skipping remaining summaries this cycle.", ex);
-                return;
+                return false;
             }
 
             _breaker.RecordSuccess();
             var now = _time.GetUtcNow();
-            await _profiles.MutateAsync(profile.Key, p => ProfileUpdater.ApplySummary(p, text, now), ct)
+            await _profiles.UpdateIfExistsAsync(profile.Key, p => ProfileUpdater.ApplySummary(p, text, now), ct)
                 .ConfigureAwait(false);
-            _profiles.Pending.Clear(profile.Key);
+            if (!scope.IsDeleted(profile.Key)) _profiles.Pending.Clear(profile.Key);
         }
+
+        return true;
     }
 
     private static void Queue(

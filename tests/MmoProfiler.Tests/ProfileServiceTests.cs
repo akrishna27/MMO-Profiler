@@ -108,4 +108,80 @@ public class ProfileServiceTests
         Assert.Empty(_log.All);
         Assert.Equal(0, _pending.CharacterCount);
     }
+
+    [Fact]
+    public async Task UpdateIfExists_MissingProfile_DoesNotCreate()
+    {
+        var alice = Key();
+        var called = false;
+
+        var applied = await _service.UpdateIfExistsAsync(alice, _ => called = true);
+
+        Assert.False(applied);
+        Assert.False(called);
+        Assert.Null(_service.Get(alice));
+        Assert.Equal(0, _service.Count());
+        Assert.Equal(0, _store.UpsertCalls);
+
+        await _service.MutateAsync(alice, p => p.MessageCount = 1);
+        Assert.True(await _service.UpdateIfExistsAsync(alice, p => p.MessageCount = 5));
+        Assert.Equal(5, _service.Get(alice)!.MessageCount);
+    }
+
+    [Fact]
+    public async Task ApplyBatch_SkipsKeysDeletedDuringScope()
+    {
+        var alice = Key("Alice Example");
+        var bob = Key("Bob Example");
+        await _service.MutateAsync(alice, p => p.MessageCount = 1);
+        await _service.MutateAsync(bob, p => p.MessageCount = 1);
+        var changes = new Dictionary<CharacterKey, Action<Profile>>
+        {
+            [alice] = p => p.MessageCount += 10,
+            [bob] = p => p.MessageCount += 10,
+        };
+
+        using (var scope = _service.BeginBatch())
+        {
+            await _service.DeleteAsync(alice);
+            Assert.True(scope.IsDeleted(alice));
+            Assert.False(scope.IsDeleted(bob));
+
+            await _service.ApplyBatchAsync(changes, scope);
+        }
+
+        Assert.Null(_service.Get(alice)); // not recreated
+        Assert.Equal(11, _service.Get(bob)!.MessageCount);
+        Assert.Equal(new[] { 1 }, _store.UpsertManySizes);
+
+        // A scope opened after the delete does not remember it, so a later batch may create the profile again.
+        using var later = _service.BeginBatch();
+        await _service.ApplyBatchAsync(changes, later);
+        Assert.NotNull(_service.Get(alice));
+    }
+
+    [Fact]
+    public async Task ApplyBatch_SkipsEverything_WhenDeleteAllDuringScope()
+    {
+        var alice = Key("Alice Example");
+        var bob = Key("Bob Example");
+        await _service.MutateAsync(alice, p => p.MessageCount = 1);
+        var changes = new Dictionary<CharacterKey, Action<Profile>>
+        {
+            [alice] = p => p.MessageCount += 10,
+            [bob] = p => p.MessageCount += 10,
+        };
+
+        using var scope = _service.BeginBatch();
+        await _service.DeleteAllAsync();
+        Assert.True(scope.IsInvalidated);
+        Assert.True(scope.IsDeleted(Key("Anyone Else")));
+
+        await _service.ApplyBatchAsync(changes, scope);
+        await _service.AppendToLogAsync(new[] { new LoggedMessage(Msg(alice), MessageAnalysis.Unknown) }, scope);
+
+        Assert.Equal(0, _service.Count());
+        Assert.Equal(0, _store.UpsertManyCalls);
+        Assert.Empty(_log.All);
+    }
 }

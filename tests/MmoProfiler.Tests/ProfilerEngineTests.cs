@@ -54,9 +54,9 @@ public class ProfilerEngineTests : IAsyncDisposable
     }
 
     /// <summary>Advances fake time one second, then gives the loop a moment to react without a 15 ms timer wait.</summary>
-    private async Task TickAsync(Func<bool>? until = null)
+    private async Task TickAsync(Func<bool>? until = null, TimeSpan? step = null)
     {
-        _time.Advance(TimeSpan.FromSeconds(1));
+        _time.Advance(step ?? TimeSpan.FromSeconds(1));
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < 3 && !(until?.Invoke() ?? false)) await Task.Yield();
     }
@@ -338,6 +338,173 @@ public class ProfilerEngineTests : IAsyncDisposable
 
         await Cycle();
         Assert.Equal(20, _service.Get(Alice)!.MessageCount);
+    }
+
+    // ---- deletes and errors while a cycle is in flight ----
+
+    private static TaskCompletionSource NewGate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static Task WithTimeout(Task t) => t.WaitAsync(TimeSpan.FromSeconds(10));
+
+    [Fact]
+    public async Task Cycle_ProfileDeletedDuringAnalysis_IsNotRecreated()
+    {
+        _options = _options with { StoreRawMessages = true };
+        var gate = NewGate();
+        _analyzer.Blocker = gate;
+        Enqueue(Alice, 3, "a");
+        Enqueue(Bob, 2, "b");
+
+        var cycle = Cycle();
+        await WithTimeout(_analyzer.Entered.Task);
+        await _service.DeleteAsync(Alice); // the cycle is held inside the analyser
+        gate.SetResult();
+        await WithTimeout(cycle);
+
+        Assert.Null(_service.Get(Alice));
+        Assert.Equal(2, _service.Get(Bob)!.MessageCount);
+        Assert.Equal(new[] { 1 }, _store.UpsertManySizes);
+        Assert.Equal(new[] { "b0", "b1" }, _log.All.Select(l => l.Message.Text));
+        Assert.Empty(_service.Pending.Take(Alice));
+        Assert.Equal(2, _service.Pending.Take(Bob).Count);
+    }
+
+    [Fact]
+    public async Task Cycle_DeleteAllDuringAnalysis_WritesNoProfilesOrMessages()
+    {
+        _options = _options with { StoreRawMessages = true };
+        var gate = NewGate();
+        _analyzer.Blocker = gate;
+        Enqueue(Alice, 3, "a");
+        Enqueue(Bob, 2, "b");
+
+        var cycle = Cycle();
+        await WithTimeout(_analyzer.Entered.Task);
+        await _service.DeleteAllAsync();
+        gate.SetResult();
+        await WithTimeout(cycle);
+
+        Assert.Equal(0, _store.Count());
+        Assert.Equal(0, _store.UpsertManyCalls);
+        Assert.Empty(_log.All);
+        Assert.Equal(0, _service.Pending.CharacterCount);
+        Assert.Empty(_summarizer.Requests);
+
+        // The next cycle works normally: only the cycle that was in flight was affected.
+        Enqueue(Bob, 1, "later");
+        await Cycle();
+        Assert.Equal(1, _service.Get(Bob)!.MessageCount);
+    }
+
+    [Fact]
+    public async Task Cycle_ProfileDeletedDuringSummary_IsNotRecreated()
+    {
+        _options = _options with { SummaryThreshold = 5 };
+        var gate = NewGate();
+        _summarizer.Blocker = gate;
+        Enqueue(Alice, 6, "a");
+
+        var cycle = Cycle();
+        await WithTimeout(_summarizer.Entered.Task);
+        Assert.NotNull(_service.Get(Alice)); // the batch save already happened
+        await _service.DeleteAsync(Alice);
+        gate.SetResult();
+        await WithTimeout(cycle);
+
+        Assert.Single(_summarizer.Requests);
+        Assert.Null(_service.Get(Alice));
+        Assert.Equal(0, _store.Count());
+        Assert.Empty(_service.Pending.Take(Alice));
+    }
+
+    [Fact]
+    public async Task Cycle_CleanCycle_ClearsLastError_FromAnySource()
+    {
+        _options = _options with { SummaryThreshold = 5 };
+
+        // Source 1: the analyser.
+        _analyzer.Handler = FakeAnalyzer.AlwaysThrow();
+        Enqueue(Alice, 1);
+        await Cycle();
+        Assert.StartsWith("Analyzer:", _engine.Status.LastError);
+        _analyzer.Handler = (_, chunk) => chunk.Select(_ => FakeAnalyzer.Friendly).ToList();
+        Enqueue(Alice, 1);
+        await Cycle();
+        Assert.Null(_engine.Status.LastError);
+
+        // Source 2: the summariser.
+        _summarizer.Handler = _ => throw new AnalyzerUnavailableException("model gone");
+        Enqueue(Bob, 6);
+        await Cycle();
+        Assert.StartsWith("Summariser:", _engine.Status.LastError);
+        _summarizer.Handler = r => "fine";
+        Enqueue(Bob, 1);
+        await Cycle();
+        Assert.Null(_engine.Status.LastError);
+        Assert.Equal("fine", _service.Get(Bob)!.Summary);
+
+        // Source 3: storage.
+        _store.ThrowOnNextUpsertMany = new InvalidOperationException("disk full");
+        Enqueue(Alice, 1);
+        await Assert.ThrowsAsync<InvalidOperationException>(Cycle);
+        Assert.Contains("disk full", _engine.Status.LastError);
+        Enqueue(Alice, 1);
+        await Cycle();
+        Assert.Null(_engine.Status.LastError);
+    }
+
+    [Fact]
+    public async Task Cycle_BreakerOpen_KeepsLastError()
+    {
+        _analyzer.Handler = FakeAnalyzer.AlwaysThrow();
+        for (var i = 0; i < 3; i++)
+        {
+            Enqueue(Alice, 1);
+            await Cycle();
+        }
+        var error = _engine.Status.LastError;
+        Assert.NotNull(error);
+
+        // The breaker is now open. A cycle that does no model work is not a clean cycle.
+        Enqueue(Alice, 2);
+        await Cycle();
+
+        Assert.Equal(3, _analyzer.Calls.Count);
+        Assert.Equal(error, _engine.Status.LastError);
+        Assert.False(_engine.Status.AnalyzerAvailable);
+    }
+
+    [Fact]
+    public async Task Dispose_InFlightCycleIgnoringCancellation_ReturnsAfterTwoSeconds()
+    {
+        _options = _options with { BatchInterval = TimeSpan.FromSeconds(1), EarlyTriggerQueueDepth = 1000 };
+        var gate = NewGate();
+        _analyzer.Blocker = gate; // ObserveCancellation is false: the call ignores the token
+        Enqueue(Alice, 2);
+        _engine.Start();
+
+        try
+        {
+            await AdvanceUntilAsync(() => _analyzer.Entered.Task.IsCompleted, maxSeconds: 30);
+
+            var start = _time.GetUtcNow();
+            var dispose = _engine.DisposeAsync().AsTask();
+            await Task.Delay(50);
+            Assert.False(dispose.IsCompleted); // the cycle is still stuck and no fake time has passed
+
+            // Move fake time in small steps until dispose gives up on the cycle.
+            for (var i = 0; i < 2000 && !dispose.IsCompleted; i++) await TickAsync(() => dispose.IsCompleted, TimeSpan.FromMilliseconds(100));
+            await WithTimeout(dispose);
+
+            var waited = _time.GetUtcNow() - start;
+            Assert.True(waited >= TimeSpan.FromSeconds(2), $"returned after only {waited}");
+            Assert.True(waited < TimeSpan.FromSeconds(3), $"took {waited}");
+            lock (_logged) Assert.Contains(_logged, l => l.Message.Contains("2 seconds"));
+        }
+        finally
+        {
+            gate.TrySetResult(); // let the abandoned cycle finish so nothing leaks past the test
+        }
     }
 
     // ---- background loop ----
