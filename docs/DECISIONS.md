@@ -192,3 +192,22 @@ Readings where the spec was silent:
 **Decision.** `FfxivNames.CleanSenderName` accepts a name when forename plus surname total at most 20 characters, not counting the space between them.
 
 **Why.** Found in the milestone 5 review. The original spec said "20 characters maximum in total" and the implementation counted the space, so a name of 10 + 10 letters was rejected and that player would never be profiled. The game's rule, as quoted from the Console Games Wiki character creation page on 2026-11-09, is "Forenames and surnames are restricted to 15 characters or less, with a combined limit of 20 characters." That page does not say whether the space counts; the belief that it does not is from memory and unverified. The choice is deliberately the lenient one: this check exists to reject garbage, so accepting one character too many costs nothing, while rejecting a valid name silently drops a real player.
+
+## D24. Labels are data, messages can carry two of each, emote-only messages use a table (2026-11-09)
+
+**Decision.** Agreed with the user while planning the model evaluation.
+
+- **Labels are data.** The tone and intent sets, their definitions and examples, aliases and the emoticon table live in a JSON label file: a default embedded in Core and an optional override in the plugin configuration folder. The `Tone` and `Intent` enums are removed. The prompt and the reply schema are built from the file.
+- **Up to two intents and two tones per message.** The model returns labels with a confidence from 0 to 1; the code keeps those at or above a threshold (default 0.6) up to the cap, and always keeps the strongest. Each kept label counts once, so percentages are "share of messages with this label" and do not sum to 100.
+- **A `Reaction` intent for emote-only messages** such as `:3` and `x.x`. Known emoticons are labelled from a table in the label file without a model call; the tone follows the type of emote. No new tone was added.
+
+**Why.**
+- The user has a data engineering background and wants data kept separate from logic. They expect to refine the definitions during testing, and the evaluation may tell us to merge labels; storage already keys labels by name (D20), so this costs one refactor now, before the plugin and the evaluation tool are built on enums.
+- One intent and one tone per message throws away signal. More labels give a profile more data points.
+- Many players speak largely in emoticons, and the smoke test showed a 3B model is unreliable on short input. A table is faster and consistent, and works with Ollama down.
+
+**Performance constraint from the user.** Not every machine has much VRAM. Reply length is the main cost of a model call (about 7 seconds for 20 messages in the smoke test), and a second label lengthens the reply. So the caps are options, and if the evaluation shows a meaningful slowdown the default drops to one of each ("single-label mode").
+
+**Known risk.** Small models often report the same high confidence for everything, which would make the threshold meaningless. The evaluation must measure whether confidence separates right labels from wrong ones. If it does not, the fallback is for the model to list only the labels that clearly apply, strongest first, with no numbers.
+
+**Not decided.** Whether to add a tone such as Playful for emoticons like `:3`; the user chose to map emoticons onto the existing tones for now. The starting emoticon table is a first draft for the user to refine.

@@ -2,6 +2,8 @@
 
 Version 1.0, 2026-11-09. This document is the complete brief for implementing MMO-Profiler. Read all of it before writing code.
 
+> **Read section 15 as well.** It records the label redesign agreed on 2026-11-09 and supersedes sections 5 to 9 and 11 where they conflict, until it has been folded into them.
+
 ## 1. What we are building
 
 MMO-Profiler reads incoming chat in an MMO and builds a local profile of each character who speaks. A profile answers three questions: who is this person, what do they tend to talk about, and when are they usually chatting.
@@ -677,6 +679,7 @@ The in-flight tests below need fakes that block until the test releases them (fo
 | 3 | `OllamaClient` and `AnalysisResponseParser` | Ollama tests pass |
 | 4 | LiteDB storage | Storage tests pass |
 | 5 | `MmoProfiler.Games.Ffxiv` and `ProfileView` | Mapping and view tests pass |
+| 5b | Label redesign (section 15): data-driven labels, several labels per message, emote-only messages | Section 15 tests pass and the section is folded into sections 5 to 11 |
 | 6 | `MmoProfiler.Dalamud` plugin: hook, commands, context menu, windows, configuration | Builds against the installed Dalamud; manual checklist below passes |
 | 7 | README and CI | README covers setup; CI is green |
 
@@ -709,3 +712,198 @@ CI (`.github/workflows/ci.yml`): on push and pull request, on `windows-latest`, 
 - A second analyser backend (in-process inference or another local server) behind `IMessageAnalyzer`.
 - Export and import of profiles; merging profiles after a name change or world transfer.
 - World of Warcraft companion host.
+
+## 15. Label redesign (milestone 5b)
+
+Agreed with the user on 2026-11-09 (decision D24). **This section supersedes sections 5, 6, 7, 8, 9.3 and 11 wherever they conflict.** Part of the milestone 5b work is to fold it into those sections so the spec reads as one consistent document, and then reduce this section to a short pointer.
+
+Three changes: labels are data, a message can carry more than one intent and tone, and emote-only messages are labelled from a table.
+
+### 15.1 Labels are data
+
+The `Tone` and `Intent` enums are removed. Labels are plain string ids defined in a JSON label file. No label id may appear in C# code except in tests; the reaction intent is named by the file itself.
+
+File shape:
+
+```json
+{
+  "version": 1,
+  "intents": [
+    { "id": "Socializing", "definition": "Casual conversation with no other goal.", "examples": ["lol how was your weekend"] }
+  ],
+  "tones": [
+    { "id": "Friendly", "definition": "Warm, kind or welcoming.", "examples": ["welcome! glad you joined us"] }
+  ],
+  "aliases": { "intents": { "OldId": "CurrentId" }, "tones": {} },
+  "reactionIntent": "Reaction",
+  "reactions": [
+    { "tones": ["Friendly"], "patterns": [":)", ":3", "^^"] }
+  ]
+}
+```
+
+- The default file is an embedded resource in `MmoProfiler.Core` (`Labels/default-labels.json`). Its starting content is in 15.6.
+- `LabelSet` (immutable, in Core) is the parsed file: ordered `Intents` and `Tones` (`LabelDefinition(Id, Definition, Examples)`), `ReactionIntent`, and:
+  - `string? ResolveIntent(string)` and `string? ResolveTone(string)`: trim, match case-insensitively, apply aliases, return the canonical id or null.
+  - `IReadOnlyList<string>? MatchReaction(string text)`: see 15.4.
+  - `string Fingerprint`: a stable hash of the file's meaning (ids, definitions, examples, aliases, reactions), used to tie evaluation results to the labels they were measured with.
+- `LabelSet.Parse(json)` validates and throws `LabelFileException` with a message a user can act on. Rules: ids match `^[A-Za-z][A-Za-z0-9]{0,31}$`; ids are unique within their list ignoring case; `Unknown` is reserved and not allowed; at least one intent and one tone; every alias target exists; an alias key must not also be a current id; `reactionIntent` is one of the intents; every reaction tone exists; a reaction pattern is non-empty, at most 16 characters, contains no whitespace, and appears only once in the whole file (ignoring case).
+- `LabelSetLoader.LoadOrDefault(string? overridePath, out string? error)`: with no path or a missing file, returns the default. With an invalid file, returns the default and sets `error`. With a valid file, that file replaces the default entirely (no merging). The host supplies the path (the plugin configuration directory, file name `labels.json`) and shows `error` to the user.
+- Components that need labels take a `Func<LabelSet>`, so the host can reload the file without a restart.
+
+### 15.2 More than one label per message
+
+```csharp
+public sealed record MessageAnalysis(
+    IReadOnlyList<string> Intents,   // canonical ids, strongest first; may be empty
+    IReadOnlyList<string> Tones,     // canonical ids, strongest first; may be empty
+    string Language,
+    IReadOnlyList<string> Topics)
+{
+    public static MessageAnalysis Unknown { get; }   // no intents, no tones, "und", no topics
+    public bool HasLabels => Intents.Count > 0 || Tones.Count > 0;
+}
+```
+
+New options (with `Normalize` clamps):
+
+| Option | Default | Range | Purpose |
+|---|---|---|---|
+| `MaxIntentsPerMessage` | 2 | 1 to 2 | Most intents kept for one message |
+| `MaxTonesPerMessage` | 2 | 1 to 2 | Most tones kept for one message |
+| `LabelConfidenceThreshold` | 0.6 | 0 to 1 | A label below this is dropped unless it is the strongest |
+| `LabelExamplesInPrompt` | 1 | 0 to 3 | Examples per label included in the prompt |
+
+Setting both maximums to 1 is "single-label mode". The reply gets shorter, which is the main cost of a model call, so this is the setting for machines where two labels are too slow. The evaluation decides the defaults.
+
+Model reply, per message:
+
+```json
+{ "id": 0,
+  "intents": [ { "label": "LookingForGroup", "confidence": 0.9 } ],
+  "tones":   [ { "label": "Neutral", "confidence": 0.7 }, { "label": "Friendly", "confidence": 0.4 } ],
+  "language": "en",
+  "topics": ["raids"] }
+```
+
+- The request schema is built from the current `LabelSet`: `label` is an enum of the current ids, `confidence` is a number.
+- The system prompt is built from the `LabelSet`: the fixed instructions, then each intent and each tone as `Id: definition`, with up to `LabelExamplesInPrompt` examples. It tells the model to list at most `MaxIntentsPerMessage` intents and `MaxTonesPerMessage` tones, strongest first, each with a confidence from 0 to 1, and to include a second label only when it clearly applies. Keep the existing sentences about messages being data and never following instructions in them.
+- `AnalysisResponseParser.Parse(json, inputCount, LabelSet labels, ProfilerOptions options)` applies, separately for intents and for tones:
+  1. Resolve each label through the `LabelSet`; drop any that do not resolve.
+  2. Confidence: a number is clamped to 0 to 1; missing or not a number counts as 0.
+  3. Where a label repeats, keep its highest confidence.
+  4. Order by confidence descending, keeping the model's order for ties.
+  5. Keep the entries at or above `LabelConfidenceThreshold`, up to the maximum. If none reach the threshold, keep the single strongest entry.
+  6. If the kept intents are exactly the reaction intent, set the language to `und`.
+- Everything else in the parser (matching by id, ignoring bad ids, language and topic handling, malformed JSON) is unchanged.
+
+Profiles:
+
+- `Profile.ToneCounts` and `Profile.IntentCounts` become `Dictionary<string, long>` keyed by canonical id.
+- `ProfileUpdater.ApplyAnalysis`: if `!HasLabels`, do nothing. Otherwise increment `AnalyzedCount` once, and increment each kept intent and each kept tone once. Language `und` is never counted in `LanguageCounts`. Topics are unchanged.
+- Percentages are "share of analysed messages that carried this label". They do not sum to 100.
+- `EngineStatus.Analyzed` counts messages with `HasLabels`.
+
+### 15.3 Views
+
+`ProfileView.From(profile, localOffset, LabelSet labels)`:
+
+- Tone and intent lists: merge counts through the aliases, include only labels in the current `LabelSet` (counts under retired ids stay in storage but are not shown), sort by count descending with ties in label-file order, percent = count / `AnalyzedCount` to one decimal place.
+- `ReactionPercent`: the share of analysed messages that carried the reaction intent.
+- Everything else is unchanged.
+
+### 15.4 Emote-only messages
+
+These are typed messages such as `:3`, `x.x` or `o/`. They are not game emotes (`/wave`), which stay excluded (decision D8).
+
+- `LabelSet.MatchReaction(text)`: trim the text; if it is longer than 32 characters, return null; split on whitespace; if every token equals a reaction pattern (ordinal, ignoring case), return the distinct tones of the matched patterns in order of first appearance, capped at `MaxTonesPerMessage` by the caller. Otherwise return null. So `:3` and `:3 :3` match, and `:3 hello` does not.
+- In the engine, before chunking: a drained message that matches is given `MessageAnalysis(Intents: [ReactionIntent], Tones: matched tones, Language: "und", Topics: none)` without a model call. Only the remaining messages are chunked and sent to the analyser, and results must still be applied to the right messages.
+- A cycle with only reaction messages makes no model call and does not touch the circuit breaker. Reaction labelling works while the breaker is open and when Ollama is not installed.
+- An emote-only message that is not in the table goes to the model like any other. The `Reaction` definition lets the model label it, and rule 6 in 15.2 then clears its language.
+- Reaction messages are still recorded, still added to the summary buffer (a summary may usefully say that someone mostly speaks in emoticons), and still logged when raw storage is on.
+
+### 15.5 Storage
+
+- `toneCounts` and `intentCounts` are stored and read as plain string-keyed counts, with the same NUL-key guard as topics and languages (decision D21). `channelCounts` stays enum-keyed.
+- The message log stores `intents` and `tones` as arrays of strings in place of the single `tone` and `intent` fields.
+- Nothing has been released, so no migration is needed and `SchemaVersion` stays 1.
+
+### 15.6 Starting label file
+
+Intents:
+
+| Id | Definition | Example |
+|---|---|---|
+| Socializing | Casual conversation with no other goal. | lol how was your weekend |
+| Roleplay | In-character speech or scene-setting. | She bows. "Well met, traveller." |
+| Recruiting | Seeking members for a lasting group: Free Company, linkshell or static. | FC recruiting, chill social group, discord |
+| LookingForGroup | Seeking or offering to join a one-off activity now. | LF2M healer for M4S prog |
+| Trading | Buying or selling items, gil or services. | WTS crafted 730 gear, pst |
+| Advertising | Promoting a venue, event, stream or community. | Club opens 8pm at Mist W12 P30! |
+| HelpRequest | Asking a question or asking for assistance. | where do I unlock the alliance raid? |
+| HelpOffer | Answering a question or offering assistance. | it's in Mor Dhona, talk to the NPC by the aetheryte |
+| Coordination | Organising people already in the group during an activity. | stack on marker A, tanks swap after 2 |
+| Spam | Real-money trading adverts, bot messages or repeated junk. | cheap gil fast delivery |
+| Reaction | A short reaction or emoticon with no other content. | x.x |
+| Other | A clear purpose that fits none of the above. | |
+
+Tones:
+
+| Id | Definition | Example |
+|---|---|---|
+| Neutral | Plain and matter-of-fact. | tank LB3 at 10% |
+| Friendly | Warm, kind or welcoming. | welcome! glad you joined us |
+| Humorous | Joking or playful. | lol I walked straight off the edge |
+| Excited | Enthusiastic or hyped. | WE CLEARED!!! |
+| Formal | Polite, structured, businesslike. | Applications are open; please contact an officer. |
+| Sarcastic | Says the opposite of what is meant; mocking. | oh great, another wipe, love that for us |
+| Frustrated | Annoyed or venting, not aimed at a person. | ugh this queue is taking forever |
+| Hostile | Insulting or aggressive towards someone. | you're garbage, uninstall |
+| Sad | Down, disappointed or apologetic. | sorry, I keep messing this up |
+| Flirtatious | Romantic or suggestive. | well hello there, handsome |
+
+Reactions (the tone follows the type of emote; the user will refine this table):
+
+| Tones | Patterns |
+|---|---|
+| Friendly | `:)` `:-)` `(:` `:3` `^^` `^_^` `^-^` `o/` `\o` `<3` `uwu` `o7` |
+| Humorous | `xD` `:P` `;P` `lol` `lmao` `haha` `kek` |
+| Excited | `:D` `\o/` `!!` `!!!` |
+| Sad | `:(` `:'(` `:c` `T_T` `T.T` `;_;` `D:` |
+| Frustrated | `x.x` `x_x` `>.<` `>_<` `-_-` `-.-` `ugh` |
+| Flirtatious | `;)` `;-)` `:*` |
+| Neutral | `?` `??` `...` `o.o` `o_o` `._.` |
+
+### 15.7 Tests
+
+Add a `LabelSetTests` class:
+
+- `Default_LoadsAndContainsEveryStartingLabelAndReaction`
+- `Parse_RejectsDuplicateIds_IgnoringCase`
+- `Parse_RejectsReservedUnknownId`
+- `Parse_RejectsInvalidIdCharacters` (theory)
+- `Parse_RejectsEmptyIntentOrToneList`
+- `Parse_RejectsAliasToMissingLabel_AndAliasThatIsACurrentId`
+- `Parse_RejectsReactionIntentNotInIntents`
+- `Parse_RejectsReactionWithUnknownTone`
+- `Parse_RejectsDuplicateOrInvalidReactionPattern` (theory)
+- `Resolve_IsCaseInsensitive_Trims_AndAppliesAliases`
+- `Resolve_UnknownLabel_ReturnsNull`
+- `MatchReaction_MatchesWholeMessageOnly` (theory: `:3`, `:3 :3`, ` X.X `, `:3 hello`, a 33-character string, empty)
+- `MatchReaction_SeveralPatterns_ReturnsDistinctTonesInOrder`
+- `Fingerprint_SameContent_Same_DifferentContent_Different`
+- `LoadOrDefault_NoPathOrMissingFile_ReturnsDefault_NoError`
+- `LoadOrDefault_InvalidFile_ReturnsDefault_AndSetsError`
+- `LoadOrDefault_ValidFile_ReplacesDefault`
+
+Replace or add in the existing classes (rename the old enum-based tests to match):
+
+- `AnalysisResponseParserTests`: `KeepsLabelsAtOrAboveThreshold_UpToMax_StrongestFirst`, `NothingAboveThreshold_KeepsSingleStrongest`, `UnresolvedLabels_AreDropped`, `Aliases_AreResolvedToCurrentIds`, `RepeatedLabel_KeepsHighestConfidence`, `MissingOrInvalidConfidence_CountsAsZero`, `Confidence_IsClampedToZeroToOne`, `MaxOfOne_ReturnsOnlyTheStrongest`, `ReactionOnlyIntent_SetsLanguageToUnd`, `NoIntentsOrTones_GivesUnknown`.
+- `OllamaClientTests`: `Analyze_SchemaLabels_MatchTheLabelSet` (replaces the enum test), `Analyze_SystemPrompt_ContainsEveryDefinition`, `Analyze_SystemPrompt_StatesTheLabelLimits`, `Analyze_SystemPrompt_ExampleCountFollowsOption`, `Analyze_LabelFileChange_IsPickedUpOnNextCall`.
+- `ProfileUpdaterTests`: `ApplyAnalysis_CountsEachKeptLabelOnce_AndAnalyzedOnce`, `ApplyAnalysis_NoLabels_DoesNothing`, `ApplyAnalysis_DoesNotCountUndLanguage`.
+- `ProfilerEngineTests`: `Cycle_ReactionMessages_AreLabelledFromTheTable_WithoutCallingTheAnalyzer`, `Cycle_MixedBatch_SendsOnlyNonReactions_AndAppliesResultsToTheRightMessages`, `Cycle_OnlyReactions_MakesNoModelCall_AndLeavesBreakerAlone`, `Cycle_BreakerOpen_StillLabelsReactions`.
+- `ProfileViewTests`: `Percentages_AreShareOfAnalysedMessages_AndMaySumOverOneHundred`, `LabelsNotInCurrentSet_AreOmitted`, `Aliases_MergeCountsIntoTheCurrentLabel`, `Ties_FollowLabelFileOrder`, `ReactionPercent_IsShareOfAnalysedMessages`.
+- `ProfilerOptionsTests`: defaults and exact clamps for the four new options.
+- `LiteDbStorageTests`: `ToneAndIntentCounts_RoundTripArbitraryStringKeys`, `MessageLog_RoundTripsSeveralIntentsAndTones`. The old test that dropped unknown tone and intent names on read no longer applies to tones and intents; keep it for `channelCounts`.
+
+No existing behaviour outside this section may change, and no test may be weakened. Tests that exist only because of the enums are rewritten to assert the same behaviour through label ids.
