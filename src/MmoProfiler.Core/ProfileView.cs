@@ -22,6 +22,9 @@ public sealed class ProfileView
     public required string UserNotes { get; init; }
     public required IReadOnlyList<CountEntry> Tones { get; init; }
     public required IReadOnlyList<CountEntry> Intents { get; init; }
+
+    /// <summary>Share of analysed messages that carried the reaction intent (emoticon-only messages), to one decimal place.</summary>
+    public required double ReactionPercent { get; init; }
     public required IReadOnlyList<TopicEntry> TopTopics { get; init; }
 
     /// <summary>[day, hour] in local time. Day 0 is Sunday, as in <see cref="DayOfWeek"/>.</summary>
@@ -32,10 +35,13 @@ public sealed class ProfileView
 
     /// <param name="p">The profile to project.</param>
     /// <param name="localOffset">Offset of local time from UTC; rounded to the nearest whole hour (half away from zero).</param>
-    public static ProfileView From(Profile p, TimeSpan localOffset)
+    /// <param name="labels">The current labels. Aliases are merged; counts under retired ids stay in storage but are not shown.</param>
+    public static ProfileView From(Profile p, TimeSpan localOffset, LabelSet labels)
     {
+        ArgumentNullException.ThrowIfNull(labels);
         int shift = (int)Math.Round(localOffset.TotalHours, MidpointRounding.AwayFromZero);
         var heat = BuildHeatMap(p.ActivityByHourOfWeekUtc, shift);
+        var intents = Rank(p.IntentCounts, labels.Intents, labels.ResolveIntent, p.AnalyzedCount);
 
         return new ProfileView
         {
@@ -46,8 +52,9 @@ public sealed class ProfileView
             AnalyzedCount = p.AnalyzedCount,
             Summary = p.Summary,
             UserNotes = p.UserNotes,
-            Tones = Rank(p.ToneCounts, Tone.Unknown, p.AnalyzedCount),
-            Intents = Rank(p.IntentCounts, Intent.Unknown, p.AnalyzedCount),
+            Tones = Rank(p.ToneCounts, labels.Tones, labels.ResolveTone, p.AnalyzedCount),
+            Intents = intents,
+            ReactionPercent = intents.FirstOrDefault(e => e.Name == labels.ReactionIntent)?.Percent ?? 0,
             TopTopics = p.TopicCounts
                 .OrderByDescending(kv => kv.Value)
                 .ThenBy(kv => kv.Key, StringComparer.Ordinal)
@@ -59,15 +66,28 @@ public sealed class ProfileView
         };
     }
 
-    private static List<CountEntry> Rank<TEnum>(Dictionary<TEnum, long> counts, TEnum unknown, long analyzed)
-        where TEnum : struct, Enum
+    // Merges counts through the aliases, keeps only labels in the current set, sorts by count
+    // descending with ties in label-file order. Percent is the share of analysed messages that
+    // carried the label, so the percentages need not sum to 100.
+    private static List<CountEntry> Rank(
+        Dictionary<string, long>? counts, IReadOnlyList<LabelDefinition> order,
+        Func<string?, string?> resolve, long analyzed)
     {
-        return counts
-            .Where(kv => !EqualityComparer<TEnum>.Default.Equals(kv.Key, unknown) && kv.Value > 0)
+        var merged = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var (name, count) in counts ?? new Dictionary<string, long>())
+        {
+            if (count <= 0 || resolve(name) is not { } id) continue;
+            merged[id] = merged.GetValueOrDefault(id) + count;
+        }
+
+        var position = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < order.Count; i++) position[order[i].Id] = i;
+
+        return merged
             .OrderByDescending(kv => kv.Value)
-            .ThenBy(kv => kv.Key)
+            .ThenBy(kv => position[kv.Key])
             .Select(kv => new CountEntry(
-                kv.Key.ToString(),
+                kv.Key,
                 kv.Value,
                 analyzed > 0 ? Math.Round(kv.Value * 100.0 / analyzed, 1, MidpointRounding.AwayFromZero) : 0))
             .ToList();

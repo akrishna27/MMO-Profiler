@@ -17,6 +17,7 @@ public class ProfilerEngineTests : IAsyncDisposable
     private readonly FakeSummarizer _summarizer = new();
     private readonly List<(string Message, Exception? Error)> _logged = new();
     private ProfilerOptions _options = new();
+    private LabelSet _labels = LabelSet.Default;
     private readonly MessageIntake _intake;
     private readonly ProfileService _service;
     private readonly ProfilerEngine _engine;
@@ -27,7 +28,7 @@ public class ProfilerEngineTests : IAsyncDisposable
         _options = new ProfilerOptions { QueueCapacity = 5000, SummaryThreshold = 1000 };
         _intake = new MessageIntake(() => _options);
         _service = new ProfileService(_store, _log);
-        _engine = new ProfilerEngine(_intake, _service, _analyzer, _summarizer, () => _options, _time,
+        _engine = new ProfilerEngine(_intake, _service, _analyzer, _summarizer, () => _options, () => _labels, _time,
             (m, e) => { lock (_logged) _logged.Add((m, e)); });
     }
 
@@ -151,8 +152,8 @@ public class ProfilerEngineTests : IAsyncDisposable
     {
         _analyzer.Handler = (_, chunk) => chunk
             .Select(m => m.Text == "grr"
-                ? new MessageAnalysis(Tone.Hostile, Intent.Other, "en", new[] { "anger" })
-                : new MessageAnalysis(Tone.Friendly, Intent.Socializing, "de", new[] { "hallo" }))
+                ? new MessageAnalysis(new[] { "Other" }, new[] { "Hostile" }, "en", new[] { "anger" })
+                : new MessageAnalysis(new[] { "Socializing" }, new[] { "Friendly" }, "de", new[] { "hallo" }))
             .ToList();
         _intake.Accept(M(Alice, "grr"));
         _intake.Accept(M(Bob, "hi"));
@@ -162,12 +163,12 @@ public class ProfilerEngineTests : IAsyncDisposable
 
         var a = _service.Get(Alice)!;
         var b = _service.Get(Bob)!;
-        Assert.Equal(2, a.ToneCounts[Tone.Hostile]);
-        Assert.False(a.ToneCounts.ContainsKey(Tone.Friendly));
+        Assert.Equal(2, a.ToneCounts["Hostile"]);
+        Assert.False(a.ToneCounts.ContainsKey("Friendly"));
         Assert.Equal(2, a.TopicCounts["anger"]);
-        Assert.Equal(1, b.ToneCounts[Tone.Friendly]);
+        Assert.Equal(1, b.ToneCounts["Friendly"]);
         Assert.Equal(1, b.LanguageCounts["de"]);
-        Assert.False(b.ToneCounts.ContainsKey(Tone.Hostile));
+        Assert.False(b.ToneCounts.ContainsKey("Hostile"));
         Assert.Equal(1, _store.UpsertManyCalls);
     }
 
@@ -614,5 +615,154 @@ public class ProfilerEngineTests : IAsyncDisposable
         // Further disposal is harmless, and the engine cannot be restarted.
         await _engine.DisposeAsync();
         Assert.Throws<ObjectDisposedException>(() => _engine.Start());
+    }
+
+    // ---- emote-only messages (label redesign, spec section 6.7) ----
+
+    private async Task OpenTheBreakerAsync()
+    {
+        _analyzer.Handler = FakeAnalyzer.AlwaysThrow();
+        for (var i = 0; i < 3; i++)
+        {
+            _intake.Accept(M(Alice, $"real message {i}"));
+            await Cycle();
+        }
+    }
+
+    [Fact]
+    public async Task Cycle_ReactionMessages_AreLabelledFromTheTable_WithoutCallingTheAnalyzer()
+    {
+        _intake.Accept(M(Alice, ":3"));
+        _intake.Accept(M(Alice, "x.x"));
+        _intake.Accept(M(Bob, ":3 :("));
+
+        await Cycle();
+
+        Assert.Empty(_analyzer.Calls);
+        var a = _service.Get(Alice)!;
+        Assert.Equal(2, a.MessageCount);
+        Assert.Equal(2, a.AnalyzedCount);
+        Assert.Equal(2, a.IntentCounts[_labels.ReactionIntent]);
+        Assert.Equal(1, a.ToneCounts["Friendly"]);
+        Assert.Equal(1, a.ToneCounts["Frustrated"]);
+        Assert.Empty(a.LanguageCounts); // language is "und" and is never counted
+
+        var b = _service.Get(Bob)!;
+        Assert.Equal(1, b.ToneCounts["Friendly"]);
+        Assert.Equal(1, b.ToneCounts["Sad"]);
+        Assert.Equal(3, _engine.Status.Analyzed);
+    }
+
+    [Fact]
+    public async Task Cycle_ReactionMessages_RespectMaxTonesPerMessage()
+    {
+        _options = _options with { MaxTonesPerMessage = 1 };
+        _intake.Accept(M(Alice, ":3 :("));
+
+        await Cycle();
+
+        var a = _service.Get(Alice)!;
+        Assert.Equal(1, a.ToneCounts["Friendly"]);
+        Assert.False(a.ToneCounts.ContainsKey("Sad"));
+    }
+
+    [Fact]
+    public async Task Cycle_MixedBatch_SendsOnlyNonReactions_AndAppliesResultsToTheRightMessages()
+    {
+        _analyzer.Handler = (_, chunk) => chunk
+            .Select(m => new MessageAnalysis(new[] { "HelpRequest" }, new[] { "Neutral" }, "en", new[] { "echo-" + m.Text }))
+            .ToList();
+        _intake.Accept(M(Alice, "where is the vendor"));
+        _intake.Accept(M(Bob, ":3"));
+        _intake.Accept(M(Bob, "anyone know a good static"));
+        _intake.Accept(M(Alice, "x.x"));
+        _intake.Accept(M(Alice, "thanks"));
+
+        await Cycle();
+
+        var call = Assert.Single(_analyzer.Calls);
+        Assert.Equal(new[] { "where is the vendor", "anyone know a good static", "thanks" }, call.Select(m => m.Text));
+
+        var a = _service.Get(Alice)!;
+        var b = _service.Get(Bob)!;
+        Assert.Equal(2, a.IntentCounts["HelpRequest"]);
+        Assert.Equal(1, a.IntentCounts[_labels.ReactionIntent]);
+        Assert.Equal(1, a.TopicCounts["echo-where is the vendor"]);
+        Assert.Equal(1, a.TopicCounts["echo-thanks"]);
+        Assert.False(a.TopicCounts.ContainsKey("echo-anyone know a good static"));
+        Assert.Equal(1, b.IntentCounts["HelpRequest"]);
+        Assert.Equal(1, b.IntentCounts[_labels.ReactionIntent]);
+        Assert.Equal(1, b.TopicCounts["echo-anyone know a good static"]);
+        Assert.Equal(5, _engine.Status.Analyzed);
+    }
+
+    [Fact]
+    public async Task Cycle_MixedBatch_LogsEachMessageWithItsOwnAnalysis()
+    {
+        _options = _options with { StoreRawMessages = true };
+        _analyzer.Handler = (_, chunk) => chunk
+            .Select(_ => new MessageAnalysis(new[] { "Trading" }, new[] { "Formal" }, "en", Array.Empty<string>()))
+            .ToList();
+        _intake.Accept(M(Alice, "WTS gear"));
+        _intake.Accept(M(Alice, ":3"));
+
+        await Cycle();
+
+        var logged = _log.GetRecent(Alice, 10).ToDictionary(l => l.Message.Text);
+        Assert.Equal(new[] { "Trading" }, logged["WTS gear"].Analysis.Intents);
+        Assert.Equal(new[] { _labels.ReactionIntent }, logged[":3"].Analysis.Intents);
+        Assert.Equal(new[] { "Friendly" }, logged[":3"].Analysis.Tones);
+    }
+
+    [Fact]
+    public async Task Cycle_OnlyReactions_MakesNoModelCall_AndLeavesBreakerAlone()
+    {
+        await OpenTheBreakerAsync();
+        Assert.Equal(3, _analyzer.Calls.Count);
+        Assert.False(_engine.Status.AnalyzerAvailable);
+
+        // Once the open period has passed the breaker would let a call through. A reaction-only
+        // cycle must make none, and must record neither a success nor a failure.
+        _time.Advance(TimeSpan.FromSeconds(61));
+        _analyzer.Handler = (_, chunk) => chunk.Select(_ => FakeAnalyzer.Friendly).ToList();
+        _intake.Accept(M(Alice, ":3"));
+        await Cycle();
+
+        Assert.Equal(3, _analyzer.Calls.Count);
+        Assert.False(_engine.Status.AnalyzerAvailable); // untouched by the reaction cycle
+
+        // The next real message does reach the analyser, and only then is the analyser available again.
+        _intake.Accept(M(Alice, "another real message"));
+        await Cycle();
+        Assert.Equal(4, _analyzer.Calls.Count);
+        Assert.True(_engine.Status.AnalyzerAvailable);
+    }
+
+    [Fact]
+    public async Task Cycle_BreakerOpen_StillLabelsReactions()
+    {
+        await OpenTheBreakerAsync();
+        var callsBefore = _analyzer.Calls.Count;
+
+        _intake.Accept(M(Alice, "o7"));
+        _intake.Accept(M(Alice, "plain text while the breaker is open"));
+        await Cycle();
+
+        Assert.Equal(callsBefore, _analyzer.Calls.Count); // breaker open: no model call
+        var a = _service.Get(Alice)!;
+        Assert.Equal(1, a.AnalyzedCount);                  // the reaction was labelled, the plain message was not
+        Assert.Equal(1, a.IntentCounts[_labels.ReactionIntent]);
+        Assert.Equal(1, a.ToneCounts["Friendly"]);
+    }
+
+    [Fact]
+    public async Task Cycle_ReactionMessages_AreStillRecordedAndBuffered()
+    {
+        _intake.Accept(M(Alice, ":3"));
+
+        await Cycle();
+
+        Assert.Equal(1, _service.Get(Alice)!.MessageCount);
+        Assert.Single(_service.Pending.Take(Alice));
     }
 }

@@ -13,8 +13,10 @@ public class ProfileUpdaterTests
         new(Alice, ch, null, text, at);
 
     private static MessageAnalysis Analysis(
-        Tone tone = Tone.Friendly, Intent intent = Intent.Socializing, string lang = "en", params string[] topics) =>
-        new(tone, intent, lang, topics);
+        string tone = "Friendly", string intent = "Socializing", string lang = "en", params string[] topics) =>
+        new(intent is null ? Array.Empty<string>() : new[] { intent },
+            tone is null ? Array.Empty<string>() : new[] { tone },
+            lang, topics);
 
     [Fact]
     public void RecordMessage_IncrementsCountsAndChannel()
@@ -70,7 +72,7 @@ public class ProfileUpdaterTests
         var p = NewProfile();
 
         ProfileUpdater.ApplyAnalysis(p, MessageAnalysis.Unknown);
-        ProfileUpdater.ApplyAnalysis(p, new MessageAnalysis(Tone.Unknown, Intent.Unknown, "en", new[] { "dungeons" }));
+        ProfileUpdater.ApplyAnalysis(p, new MessageAnalysis(Array.Empty<string>(), Array.Empty<string>(), "en", new[] { "dungeons" }));
 
         Assert.Equal(0, p.AnalyzedCount);
         Assert.Empty(p.ToneCounts);
@@ -84,17 +86,68 @@ public class ProfileUpdaterTests
     {
         var p = NewProfile();
 
-        ProfileUpdater.ApplyAnalysis(p, Analysis(Tone.Friendly, Intent.Socializing, "en"));
-        ProfileUpdater.ApplyAnalysis(p, Analysis(Tone.Friendly, Intent.Recruiting, "de"));
-        ProfileUpdater.ApplyAnalysis(p, Analysis(Tone.Hostile, Intent.Unknown, "en")); // one side known is enough
+        ProfileUpdater.ApplyAnalysis(p, Analysis("Friendly", "Socializing", "en"));
+        ProfileUpdater.ApplyAnalysis(p, Analysis("Friendly", "Recruiting", "de"));
+        ProfileUpdater.ApplyAnalysis(p, Analysis("Hostile", null!, "en")); // one side known is enough
 
         Assert.Equal(3, p.AnalyzedCount);
-        Assert.Equal(2, p.ToneCounts[Tone.Friendly]);
-        Assert.Equal(1, p.ToneCounts[Tone.Hostile]);
-        Assert.Equal(1, p.IntentCounts[Intent.Socializing]);
-        Assert.Equal(1, p.IntentCounts[Intent.Recruiting]);
+        Assert.Equal(2, p.ToneCounts["Friendly"]);
+        Assert.Equal(1, p.ToneCounts["Hostile"]);
+        Assert.Equal(1, p.IntentCounts["Socializing"]);
+        Assert.Equal(1, p.IntentCounts["Recruiting"]);
         Assert.Equal(2, p.LanguageCounts["en"]);
         Assert.Equal(1, p.LanguageCounts["de"]);
+    }
+
+    [Fact]
+    public void ApplyAnalysis_CountsEachKeptLabelOnce_AndAnalyzedOnce()
+    {
+        var p = NewProfile();
+        var twoAndTwo = new MessageAnalysis(
+            new[] { "Trading", "Advertising" }, new[] { "Friendly", "Humorous" }, "en", Array.Empty<string>());
+
+        ProfileUpdater.ApplyAnalysis(p, twoAndTwo);
+        ProfileUpdater.ApplyAnalysis(p, Analysis("Friendly", "Trading", "en"));
+        // A label listed twice in one analysis still counts once for that message.
+        ProfileUpdater.ApplyAnalysis(p, new MessageAnalysis(
+            new[] { "Spam", "Spam" }, new[] { "Hostile" }, "en", Array.Empty<string>()));
+
+        Assert.Equal(3, p.AnalyzedCount);
+        Assert.Equal(2, p.IntentCounts["Trading"]);
+        Assert.Equal(1, p.IntentCounts["Advertising"]);
+        Assert.Equal(1, p.IntentCounts["Spam"]);
+        Assert.Equal(2, p.ToneCounts["Friendly"]);
+        Assert.Equal(1, p.ToneCounts["Humorous"]);
+        Assert.Equal(1, p.ToneCounts["Hostile"]);
+        Assert.Equal(3, p.LanguageCounts["en"]);
+    }
+
+    [Fact]
+    public void ApplyAnalysis_NoLabels_DoesNothing()
+    {
+        var p = NewProfile();
+
+        ProfileUpdater.ApplyAnalysis(p, new MessageAnalysis(
+            Array.Empty<string>(), Array.Empty<string>(), "en", new[] { "raids" }));
+
+        Assert.Equal(0, p.AnalyzedCount);
+        Assert.Empty(p.IntentCounts);
+        Assert.Empty(p.ToneCounts);
+        Assert.Empty(p.LanguageCounts);
+        Assert.Empty(p.TopicCounts);
+    }
+
+    [Fact]
+    public void ApplyAnalysis_DoesNotCountUndLanguage()
+    {
+        var p = NewProfile();
+
+        ProfileUpdater.ApplyAnalysis(p, Analysis("Friendly", "Reaction", "und"));
+        ProfileUpdater.ApplyAnalysis(p, Analysis("Friendly", "Socializing", "en"));
+
+        Assert.Equal(2, p.AnalyzedCount);
+        Assert.False(p.LanguageCounts.ContainsKey("und"));
+        Assert.Equal(1, p.LanguageCounts["en"]);
     }
 
     [Fact]

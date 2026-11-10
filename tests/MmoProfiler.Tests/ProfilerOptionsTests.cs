@@ -90,6 +90,68 @@ public class ProfilerOptionsTests
     }
 
     [Fact]
+    public void LabelOptions_HaveTheSpecifiedDefaults()
+    {
+        var o = new ProfilerOptions();
+
+        Assert.Equal(2, o.MaxIntentsPerMessage);
+        Assert.Equal(2, o.MaxTonesPerMessage);
+        Assert.Equal(0.6, o.LabelConfidenceThreshold);
+        Assert.Equal(1, o.LabelExamplesInPrompt);
+
+        // The defaults are already inside their ranges.
+        var n = o.Normalize();
+        Assert.Equal(2, n.MaxIntentsPerMessage);
+        Assert.Equal(2, n.MaxTonesPerMessage);
+        Assert.Equal(0.6, n.LabelConfidenceThreshold);
+        Assert.Equal(1, n.LabelExamplesInPrompt);
+    }
+
+    [Fact]
+    public void Normalize_ClampsLabelOptionsToTheirExactRanges()
+    {
+        var low = new ProfilerOptions
+        {
+            MaxIntentsPerMessage = -4,
+            MaxTonesPerMessage = 0,
+            LabelConfidenceThreshold = -0.5,
+            LabelExamplesInPrompt = -1,
+        }.Normalize();
+        Assert.Equal(1, low.MaxIntentsPerMessage);
+        Assert.Equal(1, low.MaxTonesPerMessage);
+        Assert.Equal(0.0, low.LabelConfidenceThreshold);
+        Assert.Equal(0, low.LabelExamplesInPrompt);
+
+        var high = new ProfilerOptions
+        {
+            MaxIntentsPerMessage = 3,
+            MaxTonesPerMessage = int.MaxValue,
+            LabelConfidenceThreshold = 7.5,
+            LabelExamplesInPrompt = 4,
+        }.Normalize();
+        Assert.Equal(2, high.MaxIntentsPerMessage);
+        Assert.Equal(2, high.MaxTonesPerMessage);
+        Assert.Equal(1.0, high.LabelConfidenceThreshold);
+        Assert.Equal(3, high.LabelExamplesInPrompt);
+
+        // The range ends themselves are kept as they are.
+        var edge = new ProfilerOptions
+        {
+            MaxIntentsPerMessage = 1,
+            MaxTonesPerMessage = 2,
+            LabelConfidenceThreshold = 1.0,
+            LabelExamplesInPrompt = 3,
+        }.Normalize();
+        Assert.Equal(1, edge.MaxIntentsPerMessage);
+        Assert.Equal(2, edge.MaxTonesPerMessage);
+        Assert.Equal(1.0, edge.LabelConfidenceThreshold);
+        Assert.Equal(3, edge.LabelExamplesInPrompt);
+
+        // NaN is not a usable threshold; it falls back to the default.
+        Assert.Equal(0.6, new ProfilerOptions { LabelConfidenceThreshold = double.NaN }.Normalize().LabelConfidenceThreshold);
+    }
+
+    [Fact]
     public void Normalize_KeepsValidValues()
     {
         var o = new ProfilerOptions { QueueCapacity = 500, ClassificationChunkSize = 10, OllamaModel = "qwen:7b" };

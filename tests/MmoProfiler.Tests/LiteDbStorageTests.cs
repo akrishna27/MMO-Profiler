@@ -17,9 +17,9 @@ public class LiteDbStorageTests
         p.AnalyzedCount = 42;
         p.ChannelCounts[ChatChannel.Say] = 3;
         p.ChannelCounts[ChatChannel.CrossWorldLinkshell] = 9;
-        p.ToneCounts[Tone.Friendly] = 7;
-        p.ToneCounts[Tone.Flirtatious] = 1;
-        p.IntentCounts[Intent.LookingForGroup] = 4;
+        p.ToneCounts["Friendly"] = 7;
+        p.ToneCounts["Flirtatious"] = 1;
+        p.IntentCounts["LookingForGroup"] = 4;
         p.LanguageCounts["en"] = 30;
         p.LanguageCounts["de"] = 2;
         p.TopicCounts["dungeons"] = 11;
@@ -229,6 +229,8 @@ public class LiteDbStorageTests
     [Fact]
     public void EnumDictionaries_StoredAsStrings_UnknownKeysIgnoredOnRead()
     {
+        // Only channelCounts is enum-keyed now. Tone and intent counts are plain label ids and keep
+        // whatever keys they have (see ToneAndIntentCounts_RoundTripArbitraryStringKeys).
         var path = Path.Combine(Path.GetTempPath(), $"mmoprofiler-{Guid.NewGuid():N}.db");
         try
         {
@@ -245,19 +247,15 @@ public class LiteDbStorageTests
                 Assert.Equal(3, doc["channelCounts"]["Say"].AsInt64);
                 Assert.Equal(4, doc["intentCounts"]["LookingForGroup"].AsInt64);
 
-                doc["toneCounts"].AsDocument["Grumpy"] = 5L;       // a name that no longer exists
-                doc["toneCounts"].AsDocument["3"] = 5L;            // a bare number, as an unnamed enum value would be
-                doc["channelCounts"].AsDocument["Telepathy"] = 2L;
-                doc["intentCounts"].AsDocument["Bartering"] = 1L;
+                doc["channelCounts"].AsDocument["Telepathy"] = 2L;   // a name that no longer exists
+                doc["channelCounts"].AsDocument["3"] = 5L;           // a bare number, as an unnamed enum value would be
                 col.Update(doc);
             }
 
             using var reopened = LiteDbStorage.Open(path);
             var loaded = reopened.Profiles.Get(key)!;
 
-            Assert.Equal(new[] { Tone.Friendly, Tone.Flirtatious }.OrderBy(t => t), loaded.ToneCounts.Keys.OrderBy(t => t));
             Assert.Equal(new[] { ChatChannel.Say, ChatChannel.CrossWorldLinkshell }.OrderBy(c => c), loaded.ChannelCounts.Keys.OrderBy(c => c));
-            Assert.Equal(new[] { Intent.LookingForGroup }, loaded.IntentCounts.Keys);
         }
         finally
         {
@@ -319,7 +317,7 @@ public class LiteDbStorageTests
         CharacterKey sender, string text, DateTimeOffset at,
         ChatChannel channel = ChatChannel.Say, string? label = null, MessageAnalysis? analysis = null) =>
         new(TestData.Msg(sender, text, channel, at, label),
-            analysis ?? new MessageAnalysis(Tone.Friendly, Intent.Socializing, "en", new[] { "greeting", "chat" }));
+            analysis ?? new MessageAnalysis(new[] { "Socializing" }, new[] { "Friendly" }, "en", new[] { "greeting", "chat" }));
 
     [Fact]
     public void MessageLog_RoundTripsMessageAndAnalysis()
@@ -337,8 +335,8 @@ public class LiteDbStorageTests
         Assert.Equal("LS3", loaded.Message.ChannelLabel);
         Assert.Equal("LS hello", loaded.Message.Text);
         Assert.Equal(T0, loaded.Message.TimestampUtc);
-        Assert.Equal(Tone.Friendly, loaded.Analysis.Tone);
-        Assert.Equal(Intent.Socializing, loaded.Analysis.Intent);
+        Assert.Equal(new[] { "Friendly" }, loaded.Analysis.Tones);
+        Assert.Equal(new[] { "Socializing" }, loaded.Analysis.Intents);
         Assert.Equal("en", loaded.Analysis.Language);
         Assert.Equal(new[] { "greeting", "chat" }, loaded.Analysis.Topics);
     }
@@ -353,10 +351,60 @@ public class LiteDbStorageTests
         var loaded = Assert.Single(storage.Messages.GetRecent(key, 5));
 
         Assert.Null(loaded.Message.ChannelLabel);
-        Assert.Equal(Tone.Unknown, loaded.Analysis.Tone);
-        Assert.Equal(Intent.Unknown, loaded.Analysis.Intent);
+        Assert.Empty(loaded.Analysis.Tones);
+        Assert.Empty(loaded.Analysis.Intents);
+        Assert.False(loaded.Analysis.HasLabels);
         Assert.Equal("und", loaded.Analysis.Language);
         Assert.Empty(loaded.Analysis.Topics);
+    }
+
+    [Fact]
+    public void MessageLog_RoundTripsSeveralIntentsAndTones()
+    {
+        using var storage = LiteDbStorage.OpenInMemory();
+        var key = TestData.Key();
+        var analysis = new MessageAnalysis(
+            new[] { "LookingForGroup", "Coordination" }, new[] { "Excited", "Friendly" }, "en", new[] { "raids" });
+
+        storage.Messages.Append(new[] { Logged(key, "LF2M now!", T0, analysis: analysis) });
+        var loaded = Assert.Single(storage.Messages.GetRecent(key, 5));
+
+        // Order is meaningful (strongest first) and must survive the round trip.
+        Assert.Equal(new[] { "LookingForGroup", "Coordination" }, loaded.Analysis.Intents);
+        Assert.Equal(new[] { "Excited", "Friendly" }, loaded.Analysis.Tones);
+    }
+
+    [Fact]
+    public void ToneAndIntentCounts_RoundTripArbitraryStringKeys()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mmoprofiler-{Guid.NewGuid():N}.db");
+        try
+        {
+            var key = TestData.Key();
+            var p = FullProfile(key);
+            p.ToneCounts.Clear();
+            p.IntentCounts.Clear();
+            // Ids from a user's own label file, including one no longer in any label set.
+            p.ToneCounts["Playful"] = 3;
+            p.ToneCounts["RetiredTone"] = 2;
+            p.IntentCounts["Reaction"] = 5;
+            p.IntentCounts["Smuggling"] = 1;
+            p.IntentCounts["Bad\0Key"] = 9; // a NUL in a field name would make LiteDB reject the whole batch (D21)
+
+            using (var storage = LiteDbStorage.Open(path))
+                storage.Profiles.UpsertMany(new[] { p, FullProfile(TestData.Key("Bob Builder")) });
+
+            using var reopened = LiteDbStorage.Open(path);
+            var loaded = reopened.Profiles.Get(key)!;
+
+            Assert.Equal(new Dictionary<string, long> { ["Playful"] = 3, ["RetiredTone"] = 2 }, loaded.ToneCounts);
+            Assert.Equal(new Dictionary<string, long> { ["Reaction"] = 5, ["Smuggling"] = 1 }, loaded.IntentCounts);
+            Assert.NotNull(reopened.Profiles.Get(TestData.Key("Bob Builder"))); // the batch was not lost
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]

@@ -12,8 +12,10 @@ public sealed class Profile
     public long MessageCount { get; set; }
     public long AnalyzedCount { get; set; }
     public Dictionary<ChatChannel, long> ChannelCounts { get; set; } = new();
-    public Dictionary<Tone, long> ToneCounts { get; set; } = new();
-    public Dictionary<Intent, long> IntentCounts { get; set; } = new();
+    /// <summary>Keyed by canonical tone id; the number of analysed messages that carried it.</summary>
+    public Dictionary<string, long> ToneCounts { get; set; } = new();
+    /// <summary>Keyed by canonical intent id; the number of analysed messages that carried it.</summary>
+    public Dictionary<string, long> IntentCounts { get; set; } = new();
     public Dictionary<string, long> LanguageCounts { get; set; } = new();
     public Dictionary<string, long> TopicCounts { get; set; } = new();
     public int[] ActivityByHourOfWeekUtc { get; set; } = new int[HoursPerWeek];

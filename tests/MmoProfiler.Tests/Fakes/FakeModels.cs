@@ -6,7 +6,7 @@ namespace MmoProfiler.Tests.Fakes;
 public sealed class FakeAnalyzer : IMessageAnalyzer
 {
     public static MessageAnalysis Friendly { get; } =
-        new(Tone.Friendly, Intent.Socializing, "en", new[] { "chat" });
+        new(new[] { "Socializing" }, new[] { "Friendly" }, "en", new[] { "chat" });
 
     private readonly object _gate = new();
 

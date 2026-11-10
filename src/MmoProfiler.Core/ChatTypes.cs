@@ -15,21 +15,18 @@ public sealed record ChatMessage(
     string Text,
     DateTimeOffset TimestampUtc);
 
-public enum Tone
-{
-    Unknown, Neutral, Friendly, Humorous, Excited, Formal,
-    Sarcastic, Frustrated, Hostile, Sad, Flirtatious
-}
-
-public enum Intent
-{
-    Unknown, Socializing, Roleplay, Recruiting, LookingForGroup, Trading,
-    Advertising, HelpRequest, HelpOffer, Coordination, Spam, Other
-}
-
+/// <summary>
+/// What the model (or the emoticon table) made of one message. Intents and tones are canonical label
+/// ids from the <see cref="LabelSet"/>, strongest first; either list may be empty.
+/// </summary>
 public sealed record MessageAnalysis(
-    Tone Tone, Intent Intent, string Language, IReadOnlyList<string> Topics)
+    IReadOnlyList<string> Intents,
+    IReadOnlyList<string> Tones,
+    string Language,
+    IReadOnlyList<string> Topics)
 {
     public static MessageAnalysis Unknown { get; } =
-        new(Tone.Unknown, Intent.Unknown, "und", Array.Empty<string>());
+        new(Array.Empty<string>(), Array.Empty<string>(), "und", Array.Empty<string>());
+
+    public bool HasLabels => Intents.Count > 0 || Tones.Count > 0;
 }

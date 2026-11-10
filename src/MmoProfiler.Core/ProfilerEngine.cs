@@ -16,6 +16,7 @@ public sealed class ProfilerEngine : IAsyncDisposable
     private readonly IMessageAnalyzer _analyzer;
     private readonly IProfileSummarizer _summarizer;
     private readonly Func<ProfilerOptions> _options;
+    private readonly Func<LabelSet> _labels;
     private readonly TimeProvider _time;
     private readonly Action<string, Exception?>? _log;
     private readonly CircuitBreaker _breaker;
@@ -36,13 +37,14 @@ public sealed class ProfilerEngine : IAsyncDisposable
     public ProfilerEngine(
         MessageIntake intake, ProfileService profiles,
         IMessageAnalyzer analyzer, IProfileSummarizer summarizer,
-        Func<ProfilerOptions> options, TimeProvider time, Action<string, Exception?>? log = null)
+        Func<ProfilerOptions> options, Func<LabelSet> labels, TimeProvider time, Action<string, Exception?>? log = null)
     {
         _intake = intake ?? throw new ArgumentNullException(nameof(intake));
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _analyzer = analyzer ?? throw new ArgumentNullException(nameof(analyzer));
         _summarizer = summarizer ?? throw new ArgumentNullException(nameof(summarizer));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _labels = labels ?? throw new ArgumentNullException(nameof(labels));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _log = log;
         _breaker = new CircuitBreaker(time);
@@ -150,36 +152,62 @@ public sealed class ProfilerEngine : IAsyncDisposable
             _profiles.Pending.Add(m);
         }
 
-        // 3. Classification, chunk by chunk.
+        // 3. Emoticon-only messages are labelled from the label file with no model call. This works
+        //    while the breaker is open and when Ollama is not installed.
         var analyses = new MessageAnalysis[batch.Count];
         Array.Fill(analyses, MessageAnalysis.Unknown);
         long analyzedThisCycle = 0;
 
-        if (_breaker.IsOpen)
+        var labels = _labels();
+        var toAnalyze = new List<int>(batch.Count); // indexes into batch of the messages the model must label
+        for (var i = 0; i < batch.Count; i++)
+        {
+            var tones = labels.MatchReaction(batch[i].Text);
+            if (tones is null)
+            {
+                toAnalyze.Add(i);
+                continue;
+            }
+
+            var reaction = new MessageAnalysis(
+                new[] { labels.ReactionIntent },
+                tones.Take(Math.Max(1, o.MaxTonesPerMessage)).ToList(),
+                "und",
+                Array.Empty<string>());
+            analyses[i] = reaction;
+            analyzedThisCycle++;
+            Queue(perProfile, batch[i].Sender, p => ProfileUpdater.ApplyAnalysis(p, reaction));
+        }
+
+        // 3b. Everything else goes to the model, chunk by chunk. A cycle of only emoticons makes no
+        //     call and leaves the breaker and the availability flag alone.
+        if (toAnalyze.Count > 0 && _breaker.IsOpen)
         {
             SetAnalyzerAvailable(false);
         }
-        else
+        else if (toAnalyze.Count > 0)
         {
             var chunkSize = Math.Max(1, o.ClassificationChunkSize);
             var maxChars = Math.Max(1, o.ClassificationChunkMaxChars);
             var next = 0;
-            while (next < batch.Count)
+            while (next < toAnalyze.Count)
             {
                 // A chunk closes at chunkSize messages or when the next message would push its
                 // text over maxChars; a message over the budget on its own gets a chunk to itself.
                 var start = next;
                 var chars = 0;
                 var end = start;
-                while (end < batch.Count && end - start < chunkSize)
+                while (end < toAnalyze.Count && end - start < chunkSize)
                 {
-                    var len = batch[end].Text.Length;
+                    var len = batch[toAnalyze[end]].Text.Length;
                     if (end > start && chars + len > maxChars) break;
                     chars += len;
                     end++;
                 }
                 next = end;
-                var chunk = batch.GetRange(start, end - start);
+                var chunk = new List<ChatMessage>(end - start);
+                for (var k = start; k < end; k++) chunk.Add(batch[toAnalyze[k]]);
+
                 IReadOnlyList<MessageAnalysis> results;
                 try
                 {
@@ -205,8 +233,8 @@ public sealed class ProfilerEngine : IAsyncDisposable
                 for (var i = 0; i < chunk.Count && i < results.Count; i++)
                 {
                     var analysis = results[i] ?? MessageAnalysis.Unknown;
-                    analyses[start + i] = analysis;
-                    if (analysis.Tone != Tone.Unknown || analysis.Intent != Intent.Unknown) analyzedThisCycle++;
+                    analyses[toAnalyze[start + i]] = analysis;
+                    if (analysis.HasLabels) analyzedThisCycle++;
                     var sender = chunk[i].Sender;
                     Queue(perProfile, sender, p => ProfileUpdater.ApplyAnalysis(p, analysis));
                 }

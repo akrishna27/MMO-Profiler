@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestones 1 to 5 reviewed and pushed; CI live; label redesign specified). Update this file with every change to the codebase.
+Last updated: 2026-11-10 (milestone 5b, the label redesign, implemented and awaiting review; milestones 1 to 5 reviewed and pushed; CI live). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -11,7 +11,7 @@ Last updated: 2026-11-09 (milestones 1 to 5 reviewed and pushed; CI live; label 
 | 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
 | 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Done, reviewed | Commit `16d5571` plus the name-length fix (D23). Chat codes independently re-checked against Dalamud `master` in review: all match (D22). 277 tests pass on 10 consecutive runs. |
-| 5b. Label redesign | Specified, not started | Spec section 15 and decision D24: labels as data, up to two intents and tones per message, emote-only messages from a table. Must be done before the model evaluation. |
+| 5b. Label redesign | Implemented, awaiting review | Decisions D24 and D25. Labels are data (`Labels/default-labels.json` embedded in Core, optional `labels.json` override via `LabelSetLoader`); up to two intents and tones per message with confidence; emoticon-only messages labelled from a table with no model call. Spec section 15 is folded into 5.5, 6.6, 7.1, 8, 9.3 and 11. 360 tests pass (277 before), 6 consecutive runs. Must be reviewed before the model evaluation. |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | CI done; README not started | `.github/workflows/ci.yml` runs `dotnet test tests/MmoProfiler.Tests` on `windows-latest` for every push to `main` and every pull request. |
 
@@ -19,7 +19,7 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Milestone 5b (Sonnet): implement spec section 15, then fold it into sections 5 to 11. Review before going further; it touches most of Core.
+1. Review milestone 5b; it touches most of Core. Read decision D25 first: it lists every place the spec was silent and what was chosen.
 2. Model evaluation, planned with the user in steps. Step 1 (label definitions) is done and is in section 15.6. Still to plan: the test set, the evaluation tool, the candidate models and the pass bar. The evaluation must also answer two questions from D24: is the model's confidence meaningful, and how much slower are two labels than one.
 3. Milestone 6 stays blocked on the items under "Before milestone 6".
 

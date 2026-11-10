@@ -7,6 +7,7 @@ public sealed record ProfilerOptions
 {
     public const string DefaultEndpoint = "http://127.0.0.1:11434";
     public const string DefaultModel = "llama3.2:3b";
+    public const double DefaultLabelConfidenceThreshold = 0.6;
 
     public static IReadOnlySet<ChatChannel> DefaultChannels { get; } = new[]
     {
@@ -32,6 +33,10 @@ public sealed record ProfilerOptions
     public int OllamaContextTokens { get; init; } = 8192;
     public int ClassificationChunkMaxChars { get; init; } = 4000;
     public int SummaryMaxInputChars { get; init; } = 6000;
+    public int MaxIntentsPerMessage { get; init; } = 2;
+    public int MaxTonesPerMessage { get; init; } = 2;
+    public double LabelConfidenceThreshold { get; init; } = DefaultLabelConfidenceThreshold;
+    public int LabelExamplesInPrompt { get; init; } = 1;
 
     /// <summary>Returns a copy with every value clamped to a sane range.</summary>
     public ProfilerOptions Normalize()
@@ -58,6 +63,12 @@ public sealed record ProfilerOptions
             OllamaContextTokens = Math.Clamp(OllamaContextTokens, 2048, 32768),
             ClassificationChunkMaxChars = Math.Clamp(ClassificationChunkMaxChars, 500, 20000),
             SummaryMaxInputChars = Math.Clamp(SummaryMaxInputChars, 500, 20000),
+            MaxIntentsPerMessage = Math.Clamp(MaxIntentsPerMessage, 1, 2),
+            MaxTonesPerMessage = Math.Clamp(MaxTonesPerMessage, 1, 2),
+            LabelConfidenceThreshold = double.IsNaN(LabelConfidenceThreshold)
+                ? DefaultLabelConfidenceThreshold
+                : Math.Clamp(LabelConfidenceThreshold, 0.0, 1.0),
+            LabelExamplesInPrompt = Math.Clamp(LabelExamplesInPrompt, 0, 3),
         };
     }
 

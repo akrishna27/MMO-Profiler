@@ -4,18 +4,21 @@ namespace MmoProfiler.Core.Ollama;
 
 /// <summary>
 /// Turns the model's classification reply (the JSON text inside the chat reply) into one
-/// <see cref="MessageAnalysis"/> per input message. Lenient: bad values become <c>Unknown</c>.
+/// <see cref="MessageAnalysis"/> per input message. Lenient: bad values are dropped.
 /// </summary>
 public static class AnalysisResponseParser
 {
-    private static readonly Dictionary<string, Tone> Tones = NamesOf<Tone>();
-    private static readonly Dictionary<string, Intent> Intents = NamesOf<Intent>();
-
     /// <param name="json">The JSON text produced by the model.</param>
     /// <param name="inputCount">How many messages were sent; valid ids are 0 to inputCount - 1.</param>
+    /// <param name="labels">Resolves label names (and aliases) to canonical ids.</param>
+    /// <param name="options">Supplies the per-message maximums and the confidence threshold.</param>
     /// <exception cref="AnalyzerUnavailableException">The text is not valid JSON or has no <c>results</c> array.</exception>
-    public static IReadOnlyList<MessageAnalysis> Parse(string json, int inputCount)
+    public static IReadOnlyList<MessageAnalysis> Parse(
+        string json, int inputCount, LabelSet labels, ProfilerOptions options)
     {
+        ArgumentNullException.ThrowIfNull(labels);
+        ArgumentNullException.ThrowIfNull(options);
+
         var output = new MessageAnalysis[Math.Max(0, inputCount)];
         Array.Fill(output, MessageAnalysis.Unknown);
 
@@ -48,27 +51,55 @@ public static class AnalysisResponseParser
                 if (id < 0 || id >= output.Length) continue; // out of range
                 if (!seen.Add(id)) continue;                 // duplicate: the first result for an id wins
 
-                output[id] = new MessageAnalysis(
-                    Lookup(item, "tone", Tones),
-                    Lookup(item, "intent", Intents),
-                    ParseLanguage(item),
-                    ParseTopics(item));
+                var intents = ParseLabels(item, "intents", labels.ResolveIntent, options.MaxIntentsPerMessage, options.LabelConfidenceThreshold);
+                var tones = ParseLabels(item, "tones", labels.ResolveTone, options.MaxTonesPerMessage, options.LabelConfidenceThreshold);
+
+                // An emoticon says nothing about language, whichever way it was labelled.
+                var language = intents.Count == 1 && string.Equals(intents[0], labels.ReactionIntent, StringComparison.Ordinal)
+                    ? "und"
+                    : ParseLanguage(item);
+
+                output[id] = new MessageAnalysis(intents, tones, language, ParseTopics(item));
             }
         }
 
         return output;
     }
 
-    private static T Lookup<T>(JsonElement item, string property, Dictionary<string, T> names) where T : struct, Enum
+    /// <summary>
+    /// Resolve, clamp confidence, merge repeats, order strongest first, then keep those at or above the
+    /// threshold up to the maximum; if none reach it, keep the single strongest.
+    /// </summary>
+    private static IReadOnlyList<string> ParseLabels(
+        JsonElement item, string property, Func<string?, string?> resolve, int max, double threshold)
     {
-        if (item.TryGetProperty(property, out var p)
-            && p.ValueKind == JsonValueKind.String
-            && p.GetString()?.Trim() is { } text
-            && names.TryGetValue(text, out var value))
+        if (!item.TryGetProperty(property, out var list) || list.ValueKind != JsonValueKind.Array)
+            return Array.Empty<string>();
+
+        // Insertion order is the model's order, which breaks confidence ties.
+        var entries = new List<(string Id, double Confidence)>();
+        foreach (var entry in list.EnumerateArray())
         {
-            return value;
+            if (entry.ValueKind != JsonValueKind.Object) continue;
+            if (!entry.TryGetProperty("label", out var labelProp) || labelProp.ValueKind != JsonValueKind.String) continue;
+            var id = resolve(labelProp.GetString());
+            if (id is null) continue;
+
+            var confidence = 0.0;
+            if (entry.TryGetProperty("confidence", out var c) && c.ValueKind == JsonValueKind.Number && c.TryGetDouble(out var d))
+                confidence = double.IsNaN(d) ? 0.0 : Math.Clamp(d, 0.0, 1.0);
+
+            var existing = entries.FindIndex(e => string.Equals(e.Id, id, StringComparison.Ordinal));
+            if (existing < 0) entries.Add((id, confidence));
+            else if (confidence > entries[existing].Confidence) entries[existing] = (id, confidence);
         }
-        return default; // Unknown is 0 in both enums
+
+        if (entries.Count == 0) return Array.Empty<string>();
+
+        var ordered = entries.OrderByDescending(e => e.Confidence).ToList(); // stable: ties keep the model's order
+        var kept = ordered.Where(e => e.Confidence >= threshold).Take(Math.Max(1, max)).Select(e => e.Id).ToList();
+        if (kept.Count == 0) kept.Add(ordered[0].Id);
+        return kept;
     }
 
     private static string ParseLanguage(JsonElement item)
@@ -91,8 +122,4 @@ public static class AnalysisResponseParser
             if (t.ValueKind == JsonValueKind.String && t.GetString() is { } s) topics.Add(s);
         return topics;
     }
-
-    // Names only, case-insensitive. Enum.TryParse would also accept numbers such as "3".
-    private static Dictionary<string, T> NamesOf<T>() where T : struct, Enum =>
-        Enum.GetValues<T>().ToDictionary(v => v.ToString(), v => v, StringComparer.OrdinalIgnoreCase);
 }

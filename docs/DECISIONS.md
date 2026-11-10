@@ -211,3 +211,20 @@ Readings where the spec was silent:
 **Known risk.** Small models often report the same high confidence for everything, which would make the threshold meaningless. The evaluation must measure whether confidence separates right labels from wrong ones. If it does not, the fallback is for the model to list only the labels that clearly apply, strongest first, with no numbers.
 
 **Not decided.** Whether to add a tone such as Playful for emoticons like `:3`; the user chose to map emoticons onto the existing tones for now. The starting emoticon table is a first draft for the user to refine.
+
+## D25. Readings of D24 made while implementing it (2026-11-10)
+
+**Decision.** Milestone 5b implemented D24 as specified. Where the spec was silent or ambiguous, these readings were chosen. None changes a decision; all are covered by tests and written into spec sections 5.5, 6.6 and 7.1.
+
+- **Label file strictness.** `version` is required and must be 1. `reactionIntent` is required. `aliases` and `reactions` may be left out. Every reaction entry needs a `tones` list and a `patterns` list (either may be empty). Reaction tones may be written as an alias of a tone. Comments and trailing commas in the JSON are tolerated, because users will edit this file by hand.
+- **Alias rules apply ignoring case**, like ids. An alias key is trimmed. An alias target must exist in the same list (an intent alias cannot point to a tone).
+- **`Unknown` is reserved** in the parser only. It is the one id the code names, because it is a rule about the file, not a label.
+- **Language `und` is never counted**, and neither is a blank language. Before 5b a blank language was counted as `und`.
+- **Emoticon cycles leave the analyser status alone.** A cycle with only emoticon-only messages changes neither the circuit breaker nor `AnalyzerAvailable`, because no call was made and nothing was learned. A mixed cycle behaves as before for its non-emoticon messages.
+- **The reply schema does not limit array lengths.** Whether Ollama's structured output honours `maxItems` was not checked. The parser enforces the maximums, so a long reply is cut, not rejected.
+- **Parser leniency.** Entries in `intents` and `tones` that are not objects with a string `label` are skipped. A bare string such as `"Friendly"` is skipped, not read as a label with confidence 0; the "no numbers" fallback in D24 would need that and is not built.
+- **Options.** `LabelConfidenceThreshold` of NaN becomes the default (0.6). Otherwise the clamps are exactly as in the spec.
+- **Fingerprint.** SHA-256 of a length-prefixed text form of the file's meaning, in upper-case hex. Label order is part of the meaning (it breaks ties in the view); alias order and file formatting are not.
+- **Signatures changed.** `OllamaClient(http, options, labels, time)`, `ProfilerEngine(intake, profiles, analyzer, summarizer, options, labels, time, log)` and `ProfileView.From(profile, offset, labels)`. `OllamaClient.ClassificationSystemPrompt` became `BuildClassificationSystemPrompt(labels, options)`.
+- **Message log** reads a missing `intents` or `tones` array as empty. No migration, as D24 said.
+

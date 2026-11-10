@@ -53,8 +53,8 @@ public sealed class LiteDbMessageLog : IMessageLog
             ["channelLabel"] = msg.ChannelLabel is null ? BsonValue.Null : new BsonValue(msg.ChannelLabel),
             ["text"] = msg.Text,
             ["timestampUtc"] = LiteDbStorage.ToStored(msg.TimestampUtc),
-            ["tone"] = a.Tone.ToString(),
-            ["intent"] = a.Intent.ToString(),
+            ["intents"] = new BsonArray(a.Intents.Select(t => new BsonValue(t))),
+            ["tones"] = new BsonArray(a.Tones.Select(t => new BsonValue(t))),
             ["language"] = a.Language,
             ["topics"] = new BsonArray(a.Topics.Select(t => new BsonValue(t))),
         };
@@ -70,10 +70,15 @@ public sealed class LiteDbMessageLog : IMessageLog
             d["text"].AsString,
             LiteDbStorage.FromStored(d["timestampUtc"].AsInt64));
         var analysis = new MessageAnalysis(
-            LiteDbStorage.ParseEnum(d["tone"].AsString, Tone.Unknown),
-            LiteDbStorage.ParseEnum(d["intent"].AsString, Intent.Unknown),
+            ReadStrings(d, "intents"),
+            ReadStrings(d, "tones"),
             d["language"].AsString,
             d["topics"].AsArray.Select(t => t.AsString).ToList());
         return new LoggedMessage(message, analysis);
     }
+
+    private static List<string> ReadStrings(BsonDocument d, string field) =>
+        d.TryGetValue(field, out var v) && v.IsArray
+            ? v.AsArray.Where(x => x.IsString).Select(x => x.AsString).ToList()
+            : new List<string>();
 }

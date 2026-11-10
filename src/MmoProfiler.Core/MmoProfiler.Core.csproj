@@ -2,4 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Labels\default-labels.json" LogicalName="MmoProfiler.Core.Labels.default-labels.json" />
+  </ItemGroup>
 </Project>

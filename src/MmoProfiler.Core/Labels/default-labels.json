@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "intents": [
+    { "id": "Socializing", "definition": "Casual conversation with no other goal.", "examples": ["lol how was your weekend"] },
+    { "id": "Roleplay", "definition": "In-character speech or scene-setting.", "examples": ["She bows. \"Well met, traveller.\""] },
+    { "id": "Recruiting", "definition": "Seeking members for a lasting group: Free Company, linkshell or static.", "examples": ["FC recruiting, chill social group, discord"] },
+    { "id": "LookingForGroup", "definition": "Seeking or offering to join a one-off activity now.", "examples": ["LF2M healer for M4S prog"] },
+    { "id": "Trading", "definition": "Buying or selling items, gil or services.", "examples": ["WTS crafted 730 gear, pst"] },
+    { "id": "Advertising", "definition": "Promoting a venue, event, stream or community.", "examples": ["Club opens 8pm at Mist W12 P30!"] },
+    { "id": "HelpRequest", "definition": "Asking a question or asking for assistance.", "examples": ["where do I unlock the alliance raid?"] },
+    { "id": "HelpOffer", "definition": "Answering a question or offering assistance.", "examples": ["it's in Mor Dhona, talk to the NPC by the aetheryte"] },
+    { "id": "Coordination", "definition": "Organising people already in the group during an activity.", "examples": ["stack on marker A, tanks swap after 2"] },
+    { "id": "Spam", "definition": "Real-money trading adverts, bot messages or repeated junk.", "examples": ["cheap gil fast delivery"] },
+    { "id": "Reaction", "definition": "A short reaction or emoticon with no other content.", "examples": ["x.x"] },
+    { "id": "Other", "definition": "A clear purpose that fits none of the above.", "examples": [] }
+  ],
+  "tones": [
+    { "id": "Neutral", "definition": "Plain and matter-of-fact.", "examples": ["tank LB3 at 10%"] },
+    { "id": "Friendly", "definition": "Warm, kind or welcoming.", "examples": ["welcome! glad you joined us"] },
+    { "id": "Humorous", "definition": "Joking or playful.", "examples": ["lol I walked straight off the edge"] },
+    { "id": "Excited", "definition": "Enthusiastic or hyped.", "examples": ["WE CLEARED!!!"] },
+    { "id": "Formal", "definition": "Polite, structured, businesslike.", "examples": ["Applications are open; please contact an officer."] },
+    { "id": "Sarcastic", "definition": "Says the opposite of what is meant; mocking.", "examples": ["oh great, another wipe, love that for us"] },
+    { "id": "Frustrated", "definition": "Annoyed or venting, not aimed at a person.", "examples": ["ugh this queue is taking forever"] },
+    { "id": "Hostile", "definition": "Insulting or aggressive towards someone.", "examples": ["you're garbage, uninstall"] },
+    { "id": "Sad", "definition": "Down, disappointed or apologetic.", "examples": ["sorry, I keep messing this up"] },
+    { "id": "Flirtatious", "definition": "Romantic or suggestive.", "examples": ["well hello there, handsome"] }
+  ],
+  "aliases": { "intents": {}, "tones": {} },
+  "reactionIntent": "Reaction",
+  "reactions": [
+    { "tones": ["Friendly"], "patterns": [":)", ":-)", "(:", ":3", "^^", "^_^", "^-^", "o/", "\\o", "<3", "uwu", "o7"] },
+    { "tones": ["Humorous"], "patterns": ["xD", ":P", ";P", "lol", "lmao", "haha", "kek"] },
+    { "tones": ["Excited"], "patterns": [":D", "\\o/", "!!", "!!!"] },
+    { "tones": ["Sad"], "patterns": [":(", ":'(", ":c", "T_T", "T.T", ";_;", "D:"] },
+    { "tones": ["Frustrated"], "patterns": ["x.x", "x_x", ">.<", ">_<", "-_-", "-.-", "ugh"] },
+    { "tones": ["Flirtatious"], "patterns": [";)", ";-)", ":*"] },
+    { "tones": ["Neutral"], "patterns": ["?", "??", "...", "o.o", "o_o", "._."] }
+  ]
+}

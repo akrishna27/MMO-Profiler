@@ -43,12 +43,17 @@ public static class ProfileUpdater
         ArgumentNullException.ThrowIfNull(p);
         ArgumentNullException.ThrowIfNull(a);
 
-        if (a.Tone == Tone.Unknown && a.Intent == Intent.Unknown) return;
+        if (!a.HasLabels) return;
 
         p.AnalyzedCount++;
-        Increment(p.ToneCounts, a.Tone);
-        Increment(p.IntentCounts, a.Intent);
-        Increment(p.LanguageCounts, string.IsNullOrWhiteSpace(a.Language) ? "und" : a.Language);
+        // Each kept label counts once for the message, however many times it was listed.
+        foreach (var intent in (a.Intents ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal))
+            Increment(p.IntentCounts, intent);
+        foreach (var tone in (a.Tones ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal))
+            Increment(p.ToneCounts, tone);
+        // "und" means undetermined (or an emoticon); it says nothing about the player's language.
+        if (!string.IsNullOrWhiteSpace(a.Language) && a.Language != "und")
+            Increment(p.LanguageCounts, a.Language);
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var raw in a.Topics ?? Array.Empty<string>())
