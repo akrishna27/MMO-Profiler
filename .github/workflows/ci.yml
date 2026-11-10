@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Only the test project and what it references are built. The Dalamud plugin project needs a
+      # Dalamud installation, so it must stay out of the test project's dependency graph.
+      - name: Test
+        run: dotnet test tests/MmoProfiler.Tests --configuration Release --logger "console;verbosity=normal"

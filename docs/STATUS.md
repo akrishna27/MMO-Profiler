@@ -12,14 +12,13 @@ Last updated: 2026-11-09 (milestones 1 to 5 reviewed). Update this file with eve
 | 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Done, reviewed | Commit `16d5571` plus the name-length fix (D23). Chat codes independently re-checked against Dalamud `master` in review: all match (D22). 277 tests pass on 10 consecutive runs. |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
-| 7. README and CI | Not started | CI should be pulled forward; see below. |
+| 7. README and CI | CI done; README not started | `.github/workflows/ci.yml` runs `dotnet test tests/MmoProfiler.Tests` on `windows-latest` for every push to `main` and every pull request. |
 
 GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
 1. Milestones 1 to 5 are complete and none of them needed the game. Milestone 6 is blocked on the items under "Before milestone 6"; do those next.
-2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 
 ## Ollama smoke test results
 
