@@ -125,3 +125,10 @@ The user then chose to skip the official repository.
 
 **Why.** The spec left these open. Each is the smallest reading that satisfies the listed tests.
 
+## D17. Deletes win over in-flight work (2026-11-09)
+
+**Decision.** A delete is never undone by a batch that was already being processed. Each engine cycle runs inside a `ProfileService` batch scope; deletes during the scope are recorded in it, and the batch save, the raw message log and summaries all skip deleted characters. Summary writes use `UpdateIfExistsAsync` and can never create a profile.
+
+**Why.** Found in the milestone 2 review. The original spec did not say what a delete during a cycle should do, and the implementation recreated the profile (and, with raw storage on, logged the batch's messages) after the user had deleted it. For a tool that stores other people's chat, a delete that does not stick is not acceptable.
+
+**Alternatives rejected.** A global counter with per-key tombstones grows without bound. Holding the mutation lock for the whole cycle would block the UI's note edits and deletes for as long as the model takes.

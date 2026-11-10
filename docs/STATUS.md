@@ -7,7 +7,7 @@ Last updated: 2026-11-09 (milestone 2 committed). Update this file with every ch
 | Milestone | State | Notes |
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
-| 2. Intake, circuit breaker, summary buffer, profile service, engine | Committed, not reviewed | Commit `23b811b` plus a docs follow-up. 98 tests pass. Not pushed. |
+| 2. Intake, circuit breaker, summary buffer, profile service, engine | Reviewed; fixes pending | Commit `23b811b` plus a docs follow-up. 98 tests pass. Not pushed. See "Milestone 2 review fixes". |
 | 3. Ollama client and response parser | Not started | |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
@@ -18,9 +18,17 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Review milestone 2 (see D16 in `docs/DECISIONS.md` for the choices made where the spec was silent) with the review prompt in `docs/WORKFLOW.md`. Look hardest at threading: overlapping cycles, the mutation lock in `ProfileService`, disposal within the 2 second cap, and tests that depend on real time instead of `FakeTimeProvider`.
+1. Apply the milestone 2 review fixes below (Sonnet), then have them checked before milestone 3.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Continue with milestones 3, 4 and 5. None of them needs the game.
+
+## Milestone 2 review fixes
+
+Reviewed 2026-11-09. The milestone matched the spec, all 38 required tests existed, and 98 tests passed on eight consecutive runs. The spec has been updated for the items below (sections 6.5, 6.6 and 11); the code has not. Remove this section once they are done and checked.
+
+1. **Deleted data can come back.** A profile deleted (or Delete All used) while a cycle is in flight is recreated by the batch save in `ProfilerEngine.RunCycleCoreAsync` and by the summary write in `SummariseAsync`, because `ProfileService` creates a missing profile. With raw storage on, the batch's messages are also logged after the delete. Cause: a gap in the spec. Fix: the batch scope and `UpdateIfExistsAsync` now described in spec section 6.5, used by the engine as described in 6.6 (decision D17).
+2. **`LastError` is sticky.** Only errors starting with "Analyzer:" are ever cleared, so a summary or storage error stays on the status line after recovery. Cause: the code. Fix: clear it after any clean cycle with the breaker closed (spec section 6.6).
+3. **No test holds a cycle in flight.** The fakes return instantly, so the 2 second disposal cap and deletes during a cycle are untested. Fix: blocking fakes and the nine new tests named in spec section 11.
 
 ## Before milestone 6
 
@@ -35,6 +43,8 @@ Minor points that were noted and deliberately left:
 - `Normalize_ClampsOutOfRangeValues` checks several values with "at least 1" instead of the exact bound. Tighten when next touching `ProfilerOptionsTests`.
 - `FirstSeenUtc` and `LastSeenUtc` keep the offset the message carried. They compare correctly. The storage layer must normalise to UTC in milestone 4, as the spec says.
 - `CharacterKey` has a public constructor that skips the trimming done by `CharacterKey.Create`. Storage will need the constructor; always use `Create` in application code.
+- After a restart the in-memory summary buffer is empty but `MessagesSinceSummary` is saved, so the first summary can be written from one new message plus the old summary. Consider a minimum buffered-message count.
+- For milestone 6: `MessageIntake.Accept` calls the options function on every chat message, so the plugin must return a cached normalised snapshot, not rebuild it per call. A profile created only by `SetNotesAsync` has `MessageCount` 0 and a default `FirstSeenUtc`; the UI must show that as "not seen yet". Dalamud's `Dispose` is synchronous and will block up to 2 seconds on the engine.
 - `Directory.Build.props` turns on warnings-as-errors for every project. The spec only requires it for the non-Dalamud projects, so the plugin project may opt out if Dalamud's own warnings get in the way.
 
 ## Environment notes

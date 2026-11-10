@@ -304,6 +304,14 @@ Owns the store, the optional message log and the mutation lock.
 - `SetNotesAsync(key, notes)` truncates notes to 4000 characters.
 - `DeleteAsync(key)` removes the profile, its logged messages and its pending-summary entries. `DeleteAllAsync()` clears everything.
 - `Get` and `List` read straight from the store.
+- `Task<bool> UpdateIfExistsAsync(key, change, ct)` applies the change only when the profile already exists and returns whether it did. It never creates a profile.
+
+**Deletes win over in-flight work.** A delete must never be undone by a batch that was already being processed.
+
+- `BeginBatch()` returns a disposable batch scope. The engine opens one at the start of each cycle and disposes it at the end.
+- While a scope is open, `DeleteAsync(key)` records the key in it and `DeleteAllAsync()` marks the whole scope invalidated.
+- `ApplyBatchAsync(changes, scope, ct)` skips every key deleted in that scope, and skips everything when the scope is invalidated.
+- The scope exposes `IsDeleted(key)` so the engine can apply the same rule to the raw message log and to summaries.
 
 ### 6.6 `ProfilerEngine`
 
@@ -334,6 +342,10 @@ One cycle:
 4. Apply all queued changes with one `ApplyBatchAsync`.
 5. If `StoreRawMessages` is on, append the messages with their analyses (or `MessageAnalysis.Unknown`) to the message log, and once per hour call `DeleteOlderThan` with the retention cutoff.
 6. Summaries: among the profiles touched this cycle with `MessagesSinceSummary >= SummaryThreshold`, take up to `MaxSummariesPerCycle` ordered by `MessagesSinceSummary` descending. If the breaker is closed, call the summariser for each with the previous summary and the buffered messages, then `ApplySummary` and clear that character's buffer. Failures count against the breaker and stop further summaries this cycle.
+
+Deletes during a cycle: the whole cycle runs inside one `ProfileService` batch scope (section 6.5). A character deleted while the cycle is in flight gets no profile write, no raw-log entry and no summary from that cycle. Summary writes use `UpdateIfExistsAsync`, so a summary can never create a profile.
+
+`Status.LastError` is cleared at the end of any cycle that completes with the circuit breaker closed and no analyser, summariser or storage failure. It is not limited to analyser errors.
 
 `DisposeAsync` cancels the loop and waits at most 2 seconds for an in-flight cycle. Messages still queued are discarded.
 
@@ -555,8 +567,20 @@ xUnit. Use `FakeTimeProvider` for time. Use hand-written fakes: `FakeAnalyzer` (
 - `SetNotes_TruncatesToLimit`
 - `ConcurrentMutations_DoNotLoseUpdates`
 - `Delete_RemovesProfileMessagesAndPendingBuffer`
+- `UpdateIfExists_MissingProfile_DoesNotCreate`
+- `ApplyBatch_SkipsKeysDeletedDuringScope`
+- `ApplyBatch_SkipsEverything_WhenDeleteAllDuringScope`
 
 **ProfilerEngineTests**
+
+The in-flight tests below need fakes that block until the test releases them (for example on a `TaskCompletionSource`), so a cycle can be held mid-call.
+
+- `Cycle_ProfileDeletedDuringAnalysis_IsNotRecreated`
+- `Cycle_DeleteAllDuringAnalysis_WritesNoProfilesOrMessages`
+- `Cycle_ProfileDeletedDuringSummary_IsNotRecreated`
+- `Cycle_CleanCycle_ClearsLastError_FromAnySource`
+- `Cycle_BreakerOpen_KeepsLastError`
+- `Dispose_InFlightCycleIgnoringCancellation_ReturnsAfterTwoSeconds`
 - `Cycle_EmptyQueue_DoesNothing`
 - `Cycle_RecordsDeterministicStats_EvenWhenAnalyzerThrows`
 - `Cycle_ChunksMessagesByChunkSize`
