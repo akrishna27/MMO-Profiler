@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 4 review fix applied, not pushed). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestones 1 to 4 reviewed and pushed). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -9,7 +9,7 @@ Last updated: 2026-11-09 (milestone 4 review fix applied, not pushed). Update th
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed, pushed | Commits `23b811b` and `61e90cd` (review fixes). |
 | 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
-| 4. LiteDB storage | Done, reviewed, review fix applied; not pushed | Commits `7720f68`, `9798afe` (review notes) and the NUL fix (D21). LiteDB 5.0.21. 190 tests pass. D20 reviewed and accepted. |
+| 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | Not started | CI should be pulled forward; see below. |
@@ -18,9 +18,8 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Check the milestone 4 NUL fix (D21), then push.
+1. Start milestone 5 (FFXIV mapping and `ProfileView`) with the implementation prompt in `docs/WORKFLOW.md`. It does not need the game.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
-3. Start milestone 5. None of them needs the game.
 
 ## Ollama smoke test results
 
