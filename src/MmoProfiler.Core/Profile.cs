@@ -16,6 +16,8 @@ public sealed class Profile
     public Dictionary<string, long> ToneCounts { get; set; } = new();
     /// <summary>Keyed by canonical intent id; the number of analysed messages that carried it.</summary>
     public Dictionary<string, long> IntentCounts { get; set; } = new();
+    /// <summary>Keyed by canonical flag id; the number of analysed messages that carried it.</summary>
+    public Dictionary<string, long> FlagCounts { get; set; } = new();
     public Dictionary<string, long> LanguageCounts { get; set; } = new();
     public Dictionary<string, long> TopicCounts { get; set; } = new();
     public int[] ActivityByHourOfWeekUtc { get; set; } = new int[HoursPerWeek];

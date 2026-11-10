@@ -23,6 +23,9 @@ public sealed class ProfileView
     public required IReadOnlyList<CountEntry> Tones { get; init; }
     public required IReadOnlyList<CountEntry> Intents { get; init; }
 
+    /// <summary>Flags (for example adult content), ranked like tones: share of analysed messages that carried each.</summary>
+    public required IReadOnlyList<CountEntry> Flags { get; init; }
+
     /// <summary>Share of analysed messages that carried the reaction intent (emoticon-only messages), to one decimal place.</summary>
     public required double ReactionPercent { get; init; }
     public required IReadOnlyList<TopicEntry> TopTopics { get; init; }
@@ -54,6 +57,7 @@ public sealed class ProfileView
             UserNotes = p.UserNotes,
             Tones = Rank(p.ToneCounts, labels.Tones, labels.ResolveTone, p.AnalyzedCount),
             Intents = intents,
+            Flags = Rank(p.FlagCounts, labels.Flags, labels.ResolveFlag, p.AnalyzedCount),
             ReactionPercent = intents.FirstOrDefault(e => e.Name == labels.ReactionIntent)?.Percent ?? 0,
             TopTopics = p.TopicCounts
                 .OrderByDescending(kv => kv.Value)

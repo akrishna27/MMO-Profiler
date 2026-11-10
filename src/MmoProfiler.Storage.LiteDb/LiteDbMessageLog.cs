@@ -55,6 +55,7 @@ public sealed class LiteDbMessageLog : IMessageLog
             ["timestampUtc"] = LiteDbStorage.ToStored(msg.TimestampUtc),
             ["intents"] = new BsonArray(a.Intents.Select(t => new BsonValue(t))),
             ["tones"] = new BsonArray(a.Tones.Select(t => new BsonValue(t))),
+            ["flags"] = new BsonArray(a.Flags.Select(t => new BsonValue(t))),
             ["language"] = a.Language,
             ["topics"] = new BsonArray(a.Topics.Select(t => new BsonValue(t))),
         };
@@ -73,7 +74,10 @@ public sealed class LiteDbMessageLog : IMessageLog
             ReadStrings(d, "intents"),
             ReadStrings(d, "tones"),
             d["language"].AsString,
-            d["topics"].AsArray.Select(t => t.AsString).ToList());
+            d["topics"].AsArray.Select(t => t.AsString).ToList())
+        {
+            Flags = ReadStrings(d, "flags"),
+        };
         return new LoggedMessage(message, analysis);
     }
 

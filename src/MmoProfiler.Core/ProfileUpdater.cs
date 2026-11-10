@@ -51,6 +51,8 @@ public static class ProfileUpdater
             Increment(p.IntentCounts, intent);
         foreach (var tone in (a.Tones ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal))
             Increment(p.ToneCounts, tone);
+        foreach (var flag in (a.Flags ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal))
+            Increment(p.FlagCounts, flag);
         // "und" means undetermined (or an emoticon); it says nothing about the player's language.
         if (!string.IsNullOrWhiteSpace(a.Language) && a.Language != "und")
             Increment(p.LanguageCounts, a.Language);

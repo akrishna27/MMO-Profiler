@@ -92,6 +92,40 @@ public class ProfileViewTests
     }
 
     [Fact]
+    public void Flags_ArePercentOfAnalysedMessages_AliasesMerged_RetiredOmitted()
+    {
+        var labels = LabelSet.Parse("""
+            {"version":1,
+             "intents":[{"id":"Chat","definition":"d"},{"id":"Reaction","definition":"d"}],
+             "tones":[{"id":"Warm","definition":"d"}],
+             "flags":[{"id":"Adult","definition":"d"},{"id":"Rude","definition":"d"},{"id":"Spoiler","definition":"d"}],
+             "aliases":{"flags":{"Explicit":"Adult"}},
+             "reactionIntent":"Reaction","reactions":[]}
+            """);
+        var p = NewProfile();
+        p.AnalyzedCount = 20;
+        p.FlagCounts["Adult"] = 2;
+        p.FlagCounts["explicit"] = 3;      // an alias of Adult, merged into it
+        p.FlagCounts["Spoiler"] = 5;
+        p.FlagCounts["Rude"] = 5;          // ties with Spoiler: file order puts Rude first
+        p.FlagCounts["Retired"] = 9;       // not in the current set: hidden, but kept in the profile
+        p.FlagCounts["Zero"] = 0;
+
+        var view = ProfileView.From(p, TimeSpan.Zero, labels);
+
+        Assert.Equal(["Adult", "Rude", "Spoiler"], view.Flags.Select(f => f.Name));
+        Assert.Equal([5L, 5L, 5L], view.Flags.Select(f => f.Count));
+        Assert.Equal([25.0, 25.0, 25.0], view.Flags.Select(f => f.Percent));
+        Assert.Equal(9, p.FlagCounts["Retired"]);
+
+        // No flags in the profile or the label set, and nothing analysed: empty, no division by zero.
+        Assert.Empty(ProfileView.From(NewProfile(), TimeSpan.Zero, labels).Flags);
+        Assert.Empty(ProfileView.From(p, TimeSpan.Zero, LabelSet.Parse("""
+            {"version":1,"intents":[{"id":"Chat"}],"tones":[{"id":"Warm"}],"reactionIntent":"Chat"}
+            """)).Flags);
+    }
+
+    [Fact]
     public void Ties_FollowLabelFileOrder()
     {
         var p = NewProfile();

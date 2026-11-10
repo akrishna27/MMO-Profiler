@@ -20,6 +20,7 @@ public class LiteDbStorageTests
         p.ToneCounts["Friendly"] = 7;
         p.ToneCounts["Flirtatious"] = 1;
         p.IntentCounts["LookingForGroup"] = 4;
+        p.FlagCounts["Adult"] = 2;
         p.LanguageCounts["en"] = 30;
         p.LanguageCounts["de"] = 2;
         p.TopicCounts["dungeons"] = 11;
@@ -47,6 +48,7 @@ public class LiteDbStorageTests
         Assert.Equal(expected.ChannelCounts.OrderBy(k => k.Key), actual.ChannelCounts.OrderBy(k => k.Key));
         Assert.Equal(expected.ToneCounts.OrderBy(k => k.Key), actual.ToneCounts.OrderBy(k => k.Key));
         Assert.Equal(expected.IntentCounts.OrderBy(k => k.Key), actual.IntentCounts.OrderBy(k => k.Key));
+        Assert.Equal(expected.FlagCounts.OrderBy(k => k.Key), actual.FlagCounts.OrderBy(k => k.Key));
         Assert.Equal(expected.LanguageCounts.OrderBy(k => k.Key), actual.LanguageCounts.OrderBy(k => k.Key));
         Assert.Equal(expected.TopicCounts.OrderBy(k => k.Key), actual.TopicCounts.OrderBy(k => k.Key));
         Assert.Equal(expected.ActivityByHourOfWeekUtc, actual.ActivityByHourOfWeekUtc);
@@ -400,6 +402,117 @@ public class LiteDbStorageTests
             Assert.Equal(new Dictionary<string, long> { ["Playful"] = 3, ["RetiredTone"] = 2 }, loaded.ToneCounts);
             Assert.Equal(new Dictionary<string, long> { ["Reaction"] = 5, ["Smuggling"] = 1 }, loaded.IntentCounts);
             Assert.NotNull(reopened.Profiles.Get(TestData.Key("Bob Builder"))); // the batch was not lost
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void FlagCounts_RoundTrip()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mmoprofiler-{Guid.NewGuid():N}.db");
+        try
+        {
+            var key = TestData.Key();
+            var p = FullProfile(key);
+            p.FlagCounts.Clear();
+            p.FlagCounts["Adult"] = 4;
+            p.FlagCounts["RetiredFlag"] = 1;     // kept whatever the label file says
+            p.FlagCounts["Bad\0Key"] = 9;        // NUL guard, as for the other string-keyed counts (D21)
+
+            using (var storage = LiteDbStorage.Open(path))
+                storage.Profiles.UpsertMany(new[] { p, FullProfile(TestData.Key("Bob Builder")) });
+
+            using (var raw = new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }))
+                Assert.Equal(4, raw.GetCollection("profiles").FindById(key.Id)["flagCounts"]["Adult"].AsInt64);
+
+            using var reopened = LiteDbStorage.Open(path);
+            Assert.Equal(new Dictionary<string, long> { ["Adult"] = 4, ["RetiredFlag"] = 1 }, reopened.Profiles.Get(key)!.FlagCounts);
+            Assert.NotNull(reopened.Profiles.Get(TestData.Key("Bob Builder"))); // the batch was not lost
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void FlagCounts_MissingField_ReadsAsEmpty_NoMigration()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mmoprofiler-{Guid.NewGuid():N}.db");
+        try
+        {
+            var key = TestData.Key();
+            using (var storage = LiteDbStorage.Open(path))
+                storage.Profiles.Upsert(FullProfile(key));
+            using (var raw = new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }))
+            {
+                var col = raw.GetCollection("profiles");
+                var doc = col.FindById(key.Id);
+                doc.Remove("flagCounts");        // a profile written before flags existed
+                col.Update(doc);
+            }
+
+            using var reopened = LiteDbStorage.Open(path);
+            var loaded = reopened.Profiles.Get(key)!;
+
+            Assert.Empty(loaded.FlagCounts);
+            Assert.Equal(1, loaded.SchemaVersion);
+            Assert.Equal(7, loaded.ToneCounts["Friendly"]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MessageLog_RoundTripsFlags()
+    {
+        using var storage = LiteDbStorage.OpenInMemory();
+        var key = TestData.Key();
+        var flagged = new MessageAnalysis(new[] { "Socializing" }, new[] { "Flirtatious" }, "en", Array.Empty<string>())
+        {
+            Flags = new[] { "Adult", "Rude" },
+        };
+
+        storage.Messages.Append(new[]
+        {
+            Logged(key, "flagged", T0, analysis: flagged),
+            Logged(key, "plain", T0.AddMinutes(1)),
+        });
+        var recent = storage.Messages.GetRecent(key, 5).ToDictionary(m => m.Message.Text);
+
+        Assert.Equal(new[] { "Adult", "Rude" }, recent["flagged"].Analysis.Flags);   // order kept
+        Assert.Empty(recent["plain"].Analysis.Flags);
+    }
+
+    [Fact]
+    public void MessageLog_DocumentWithoutFlagsField_ReadsAsNoFlags()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mmoprofiler-{Guid.NewGuid():N}.db");
+        try
+        {
+            var key = TestData.Key();
+            using (var storage = LiteDbStorage.Open(path))
+                storage.Messages.Append(new[] { Logged(key, "old row", T0) });
+            using (var raw = new LiteDatabase(new ConnectionString { Filename = path, Connection = ConnectionType.Direct }))
+            {
+                var col = raw.GetCollection("messages", BsonAutoId.Int64);
+                foreach (var doc in col.FindAll().ToList())
+                {
+                    doc.Remove("flags");
+                    col.Update(doc);
+                }
+            }
+
+            using var reopened = LiteDbStorage.Open(path);
+            var loaded = Assert.Single(reopened.Messages.GetRecent(key, 5));
+
+            Assert.Empty(loaded.Analysis.Flags);
+            Assert.Equal(new[] { "Friendly" }, loaded.Analysis.Tones);
         }
         finally
         {

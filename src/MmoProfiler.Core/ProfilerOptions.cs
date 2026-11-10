@@ -38,6 +38,12 @@ public sealed record ProfilerOptions
     public double LabelConfidenceThreshold { get; init; } = DefaultLabelConfidenceThreshold;
     public int LabelExamplesInPrompt { get; init; } = 1;
 
+    /// <summary>
+    /// Off by default (decision D26). When on, the model is asked for a confidence with every intent and
+    /// tone and <see cref="LabelConfidenceThreshold"/> applies. It exists so the evaluation can test it.
+    /// </summary>
+    public bool IncludeLabelConfidence { get; init; } = false;
+
     /// <summary>Returns a copy with every value clamped to a sane range.</summary>
     public ProfilerOptions Normalize()
     {

@@ -245,3 +245,16 @@ Readings where the spec was silent:
 **To measure in the evaluation.** Whether a small model sets the `Adult` flag reliably, and whether explicit content degrades its other labels. Whether the time per chunk returns to the pre-5b figure.
 
 **Privacy note.** A per-character share of adult-flagged messages is sensitive. It stays on the user's machine like the rest of the profile, and it is one more reason the data must never leave it.
+
+## D27. Readings of D26 made while implementing it (2026-11-10)
+
+**Decision.** Milestone 5c implemented D26 as specified. Where the spec was silent or ambiguous, these readings were chosen. None changes a decision; all are covered by tests and written into spec sections 5.5, 7.1 and 11.
+
+- **"No entry has a numeric confidence"** is judged over the entries that survive resolving and the reaction-intent filter, so an unresolved or dropped entry that carried a number does not switch a plain list into the confidence rules.
+- **Schema limits in the confidence form.** `minItems`, `maxItems` and the `topics` limit are sent in both forms. The spec only says the confidence form is "the 5b form"; the 5b probe's best variant had the limits, so they stay.
+- **Flags in the reply** may be plain strings or `{label}` objects; the parser takes either, resolves, drops unresolved and repeats, and does not cap them.
+- **Symbol-only rule applies after the table.** `MatchReaction` step 3 (no letter and no digit) is reached only when some token is not in the table. So `:) >.>` is a reaction with no tone (the known `:)` is not credited), and `:3 >.>` goes to the model because `:3` contains a digit. Both follow the letter of spec section 15.2 as written; crediting known tones in a mixed message is a possible refinement, not built.
+- **Reaction is the only intent.** A custom label file whose only intent is the reaction intent would give an empty intent enum. Not guarded; the file would be unusable for the model anyway.
+- **Types.** `MessageAnalysis.Flags` is an `init` property that defaults to empty rather than a fifth positional parameter, so existing constructions keep compiling. `ClassificationSchema` now takes the options (`ClassificationSchema(labels, options)`) because the limits and the confidence form come from them. `ProfileView.Flags` is required.
+- **Duplicate pattern message** still says "appears more than once" and now names the pattern it duplicates, so the existing user-facing wording and its test are unchanged.
+- **Tests rewritten for the new default** (spec-mandated, not weakened): `MissingOrInvalidConfidence_CountsAsZero` (a list with no numeric confidence now keeps the first N instead of ranking at 0; the ranking case is kept), `UnknownLabelValues_AreDropped` (a bare string is now a label), `ReactionOnlyIntent_SetsLanguageToUnd` replaced by `ReactionOnlyResult_KeepsItsLanguage`, and the OllamaClient schema, prompt and label-change tests now read plain lists and skip the reaction intent. The in-memory profile store fake also copies `FlagCounts`.

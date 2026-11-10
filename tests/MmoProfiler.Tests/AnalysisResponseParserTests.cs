@@ -93,7 +93,10 @@ public class AnalysisResponseParserTests
         Assert.Equal(new[] { "Friendly" }, r[1].Tones);
         Assert.Empty(r[1].Intents);
         Assert.False(r[2].HasLabels);
-        Assert.False(r[3].HasLabels);
+        // Plain strings are labels since milestone 5c, so "Friendly" counts; the numbers, null and the
+        // object whose label is not a string are still dropped.
+        Assert.Equal(new[] { "Friendly" }, r[3].Tones);
+        Assert.Empty(r[3].Intents);
     }
 
     [Fact]
@@ -201,9 +204,15 @@ public class AnalysisResponseParserTests
         var r = Parse(json, 1);
         Assert.Equal(new[] { "Neutral" }, r[0].Tones);
 
-        // With nothing above the threshold, the first of the zero-confidence labels is the strongest (model order breaks the tie).
+        // When no entry in the list has a numeric confidence at all, the confidence rules do not apply:
+        // the first N labels are kept in the model's order (milestone 5c).
         var allZero = Parse(Results(Item(0, tones: "{\"label\":\"Sad\"},{\"label\":\"Hostile\",\"confidence\":\"x\"}")), 1);
-        Assert.Equal(new[] { "Sad" }, allZero[0].Tones);
+        Assert.Equal(new[] { "Sad", "Hostile" }, allZero[0].Tones);
+
+        // With a numeric confidence present but below the threshold, the single strongest is kept; the
+        // entry without a confidence counts as 0, so it is not the strongest.
+        var belowThreshold = Parse(Results(Item(0, tones: "{\"label\":\"Sad\"}," + L("Hostile", 0.2))), 1);
+        Assert.Equal(new[] { "Hostile" }, belowThreshold[0].Tones);
 
         // With a threshold of 0 a missing confidence (0) still qualifies.
         var lenient = Parse(
@@ -247,19 +256,165 @@ public class AnalysisResponseParserTests
     }
 
     [Fact]
-    public void ReactionOnlyIntent_SetsLanguageToUnd()
+    public void ReactionOnlyResult_KeepsItsLanguage()
+    {
+        // The reaction intent is dropped (see ReactionIntentFromModel_IsDropped), and the old rule that set
+        // the language of a reaction-only result to "und" is gone: a full sentence the model wrongly
+        // called a reaction keeps its language.
+        var reaction = Labels.ReactionIntent;
+        var json = Results(
+            Item(0, L(reaction, 0.9), L("Sad", 0.9), lang: "en"),
+            Item(1, Plain(reaction), Plain("Sad"), lang: "de"));
+
+        var r = Parse(json, 2);
+
+        Assert.Equal("en", r[0].Language);
+        Assert.Equal("de", r[1].Language);
+        Assert.Empty(r[0].Intents);
+        Assert.Empty(r[1].Intents);
+    }
+
+    // ---- plain lists (milestone 5c) ----
+
+    // A label as a plain string, the form the model returns by default.
+    private static string Plain(string label) => "\"" + label + "\"";
+    private static string PlainList(params string[] labels) => string.Join(",", labels.Select(Plain));
+
+    [Fact]
+    public void PlainLists_KeepFirstNResolved_InModelOrder()
+    {
+        var json = Results(Item(0,
+            intents: PlainList("Trading", "Spam", "Other"),
+            tones: PlainList("Sad", "Friendly", "Neutral")));
+
+        var two = Parse(json, 1, new ProfilerOptions { MaxIntentsPerMessage = 2, MaxTonesPerMessage = 2 });
+        Assert.Equal(new[] { "Trading", "Spam" }, two[0].Intents);
+        Assert.Equal(new[] { "Sad", "Friendly" }, two[0].Tones);
+
+        var one = Parse(json, 1, new ProfilerOptions { MaxIntentsPerMessage = 1, MaxTonesPerMessage = 1 });
+        Assert.Equal(new[] { "Trading" }, one[0].Intents);
+        Assert.Equal(new[] { "Sad" }, one[0].Tones);
+
+        // The confidence threshold plays no part when there are no confidences.
+        var strict = Parse(json, 1, new ProfilerOptions { LabelConfidenceThreshold = 1.0 });
+        Assert.Equal(2, strict[0].Intents.Count);
+    }
+
+    [Fact]
+    public void PlainLists_DropUnresolvedAndRepeats()
+    {
+        var json = Results(Item(0,
+            intents: PlainList("Smuggling", "Trading", "trading", " TRADING ", "Spam"),
+            tones: PlainList("Grumpy", "Sad", "Sad", "Neutral")));
+
+        var r = Parse(json, 1);
+
+        // Unresolved labels do not use up a slot; a repeat counts once and the first occurrence wins.
+        Assert.Equal(new[] { "Trading", "Spam" }, r[0].Intents);
+        Assert.Equal(new[] { "Sad", "Neutral" }, r[0].Tones);
+    }
+
+    [Fact]
+    public void ObjectForm_StillUsesConfidenceRules()
+    {
+        // Out of order, with a repeat and one below the threshold: the 5b rules apply unchanged.
+        var json = Results(Item(0,
+            intents: string.Join(",", L("Trading", 0.3), L("Advertising", 0.6), L("Spam", 0.95), L("Spam", 0.1)),
+            tones: string.Join(",", L("Neutral", 0.5), L("Friendly", 0.2))));
+
+        var r = Parse(json, 1);
+
+        Assert.Equal(new[] { "Spam", "Advertising" }, r[0].Intents);
+        Assert.Equal(new[] { "Neutral" }, r[0].Tones); // nothing reaches 0.6: the strongest stays
+    }
+
+    [Fact]
+    public void ObjectForm_AndPlainStringsMixed_PlainStringsCountAsZeroConfidence()
+    {
+        var json = Results(Item(0, tones: Plain("Sad") + "," + L("Friendly", 0.8)));
+
+        var r = Parse(json, 1);
+
+        Assert.Equal(new[] { "Friendly" }, r[0].Tones);
+    }
+
+    [Fact]
+    public void ReactionIntentFromModel_IsDropped()
     {
         var reaction = Labels.ReactionIntent;
         var json = Results(
-            Item(0, L(reaction, 0.9), L("Sad", 0.9), lang: "en"),                          // exactly the reaction intent
-            Item(1, L(reaction, 0.9) + "," + L("Socializing", 0.8), L("Sad", 0.9), "en"),  // reaction plus another: language kept
-            Item(2, L("Socializing", 0.9), L("Sad", 0.9), "en"));
+            Item(0, Plain(reaction), PlainList("Sad")),                              // only the reaction intent
+            Item(1, PlainList(reaction, "Socializing"), PlainList("Sad")),           // reaction first, then a real one
+            Item(2, L(reaction, 0.99) + "," + L("Trading", 0.7), L("Sad", 0.9)));    // object form, highest confidence
 
         var r = Parse(json, 3);
 
-        Assert.Equal("und", r[0].Language);
-        Assert.Equal("en", r[1].Language);
-        Assert.Equal("en", r[2].Language);
+        Assert.Empty(r[0].Intents);
+        Assert.Equal(new[] { "Socializing" }, r[1].Intents);
+        Assert.Equal(new[] { "Trading" }, r[2].Intents);
+        Assert.All(r, a => Assert.DoesNotContain(reaction, a.Intents));
+    }
+
+    [Fact]
+    public void ReactionIntentFromModel_ThroughAnAlias_IsDropped()
+    {
+        var labels = LabelSet.Parse("""
+            {"version":1,
+             "intents":[{"id":"Chat","definition":"d"},{"id":"Emote","definition":"d"}],
+             "tones":[{"id":"Warm","definition":"d"}],
+             "aliases":{"intents":{"Reaction":"Emote"}},
+             "reactionIntent":"Emote","reactions":[]}
+            """);
+
+        var r = AnalysisResponseParser.Parse(
+            Results(Item(0, PlainList("Reaction", "Chat"), PlainList("Warm"))), 1, labels, Defaults);
+
+        Assert.Equal(new[] { "Chat" }, r[0].Intents);
+    }
+
+    [Fact]
+    public void Flags_ResolvedDeduplicated_UnresolvedDropped()
+    {
+        var labels = LabelSet.Parse("""
+            {"version":1,
+             "intents":[{"id":"Chat","definition":"d"}],
+             "tones":[{"id":"Warm","definition":"d"}],
+             "flags":[{"id":"Adult","definition":"d"},{"id":"Rude","definition":"d"}],
+             "aliases":{"flags":{"Explicit":"Adult"}},
+             "reactionIntent":"Chat","reactions":[]}
+            """);
+        var json = Results(
+            "{\"id\":0,\"intents\":[\"Chat\"],\"tones\":[\"Warm\"],\"flags\":[\"adult\",\"Explicit\",\"Nonsense\",\" RUDE \",\"Adult\",7,null],\"language\":\"en\",\"topics\":[]}");
+
+        var r = AnalysisResponseParser.Parse(json, 1, labels, Defaults);
+
+        Assert.Equal(new[] { "Adult", "Rude" }, r[0].Flags);
+    }
+
+    [Fact]
+    public void FlagsMissing_GivesEmptyList()
+    {
+        var json = Results(
+            Item(0, PlainList("Other"), PlainList("Neutral")),                 // Item() writes no flags at all
+            "{\"id\":1,\"intents\":[\"Other\"],\"tones\":[\"Neutral\"],\"flags\":null,\"language\":\"en\",\"topics\":[]}",
+            "{\"id\":2,\"intents\":[\"Other\"],\"tones\":[\"Neutral\"],\"flags\":[],\"language\":\"en\",\"topics\":[]}");
+
+        var r = Parse(json, 3);
+
+        Assert.All(r, a => Assert.Empty(a.Flags));
+        Assert.All(r, a => Assert.True(a.HasLabels));
+        Assert.Empty(MessageAnalysis.Unknown.Flags);
+    }
+
+    [Fact]
+    public void Flags_AloneDoNotMakeAnAnalysis()
+    {
+        var json = Results("{\"id\":0,\"intents\":[],\"tones\":[],\"flags\":[\"Adult\"],\"language\":\"en\",\"topics\":[]}");
+
+        var r = Parse(json, 1);
+
+        Assert.Equal(new[] { "Adult" }, r[0].Flags);
+        Assert.False(r[0].HasLabels);
     }
 
     [Theory]

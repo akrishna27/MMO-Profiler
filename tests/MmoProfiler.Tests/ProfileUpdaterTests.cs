@@ -123,6 +123,44 @@ public class ProfileUpdaterTests
     }
 
     [Fact]
+    public void ApplyAnalysis_CountsEachFlagOnce()
+    {
+        var p = NewProfile();
+        var flagged = new MessageAnalysis(new[] { "Socializing" }, new[] { "Flirtatious" }, "en", Array.Empty<string>())
+        {
+            Flags = new[] { "Adult", "Adult", "Rude" },   // a repeat in one analysis still counts once
+        };
+
+        ProfileUpdater.ApplyAnalysis(p, flagged);
+        ProfileUpdater.ApplyAnalysis(p, flagged with { Flags = new[] { "Adult" } });
+        ProfileUpdater.ApplyAnalysis(p, Analysis());       // no flags at all
+
+        Assert.Equal(3, p.AnalyzedCount);
+        Assert.Equal(2, p.FlagCounts["Adult"]);
+        Assert.Equal(1, p.FlagCounts["Rude"]);
+        Assert.Equal(2, p.FlagCounts.Count);
+        // Flags do not take an intent or tone slot: those are counted as usual.
+        Assert.Equal(3, p.IntentCounts["Socializing"]);
+        Assert.Equal(2, p.ToneCounts["Flirtatious"]);
+    }
+
+    [Fact]
+    public void ApplyAnalysis_FlagsWithoutLabels_AreNotCounted()
+    {
+        var p = NewProfile();
+        var flagsOnly = new MessageAnalysis(Array.Empty<string>(), Array.Empty<string>(), "en", new[] { "raids" })
+        {
+            Flags = new[] { "Adult" },
+        };
+
+        ProfileUpdater.ApplyAnalysis(p, flagsOnly);
+
+        Assert.Equal(0, p.AnalyzedCount);
+        Assert.Empty(p.FlagCounts);
+        Assert.Empty(p.TopicCounts);
+    }
+
+    [Fact]
     public void ApplyAnalysis_NoLabels_DoesNothing()
     {
         var p = NewProfile();

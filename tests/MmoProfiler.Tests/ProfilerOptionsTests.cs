@@ -98,9 +98,12 @@ public class ProfilerOptionsTests
         Assert.Equal(2, o.MaxTonesPerMessage);
         Assert.Equal(0.6, o.LabelConfidenceThreshold);
         Assert.Equal(1, o.LabelExamplesInPrompt);
+        Assert.False(o.IncludeLabelConfidence);   // decision D26: plain lists unless the evaluation says otherwise
 
         // The defaults are already inside their ranges.
         var n = o.Normalize();
+        Assert.False(n.IncludeLabelConfidence);
+        Assert.True(new ProfilerOptions { IncludeLabelConfidence = true }.Normalize().IncludeLabelConfidence);
         Assert.Equal(2, n.MaxIntentsPerMessage);
         Assert.Equal(2, n.MaxTonesPerMessage);
         Assert.Equal(0.6, n.LabelConfidenceThreshold);

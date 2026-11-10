@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-10 (milestone 5b reviewed; milestone 5c specified from its findings and waiting for Sonnet). Update this file with every change to the codebase.
+Last updated: 2026-11-10 (milestone 5c implemented and folded into the spec; waiting for review and the real-Ollama re-probe). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -12,7 +12,7 @@ Last updated: 2026-11-10 (milestone 5b reviewed; milestone 5c specified from its
 | 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Done, reviewed | Commit `16d5571` plus the name-length fix (D23). Chat codes independently re-checked against Dalamud `master` in review: all match (D22). 277 tests pass on 10 consecutive runs. |
 | 5b. Label redesign | Done, reviewed; superseded in part by 5c | Decisions D24 and D25. Labels are data (`Labels/default-labels.json` embedded in Core, optional `labels.json` override via `LabelSetLoader`); up to two intents and tones per message with confidence; emoticon-only messages labelled from a table with no model call. Spec section 15 is folded into 5.5, 6.6, 7.1, 8, 9.3 and 11. 360 tests pass (277 before), 6 consecutive runs. Must be reviewed before the model evaluation. |
-| 5c. Plain lists, reactions by code, flags | Specified, not started | Spec section 15 and decision D26. Follows from the 5b probe. Must be done, reviewed and re-probed against real Ollama before the evaluation tool is built. |
+| 5c. Plain lists, reactions by code, flags | Implemented, not yet reviewed | Decisions D26 and D27. Plain label lists (confidence off by default, option `IncludeLabelConfidence`), reaction intent assigned only by code with a normal form for emoticons, flags (`Adult`). Spec section 15 is folded into 5.1 to 5.5, 6.6, 7.1, 8, 9.3 and 11. 416 tests pass (360 before). Must be reviewed and re-probed against real Ollama before the evaluation tool is built. |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | CI done; README not started | `.github/workflows/ci.yml` runs `dotnet test tests/MmoProfiler.Tests` on `windows-latest` for every push to `main` and every pull request. |
 
@@ -20,9 +20,18 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Milestone 5c (Sonnet): implement spec section 15, then fold it into sections 5 to 11. On review, re-run the real-Ollama probe: the time for 20 messages should return to roughly 7 to 8 seconds, and no ordinary sentence should come back as a reaction.
+1. Review milestone 5c (done in code, see "Milestone 5c implementation notes"). Then re-run the real-Ollama probe: the time for 20 messages should return to roughly 7 to 8 seconds, and no ordinary sentence should come back as a reaction. Also check whether `llama3.2:3b` ever sets the `Adult` flag on invented explicit examples (use invented text, not the real logs).
 2. Model evaluation, planned with the user in steps. Step 1 (label definitions) is done (spec section 5.5.1). Step 2 (the test set) is planned; see "Evaluation test set". Still to plan: the evaluation tool, the candidate models and the pass bar. The evaluation must also answer two questions from D24: is the model's confidence meaningful, and how much slower are two labels than one.
 3. Milestone 6 stays blocked on the items under "Before milestone 6".
+
+## Milestone 5c implementation notes
+
+Implemented 2026-11-10. `dotnet test`: 416 passed, 0 failed, 0 skipped (360 before). Not run against a real Ollama server; the performance and flag-quality questions above are still open.
+
+- Done: label file flags, normal form and the new `MatchReaction` rules, the updated default table, plain-list prompt, schema (`minItems`/`maxItems`) and parser (both forms), flags through `MessageAnalysis`, `Profile.FlagCounts`, `ProfileUpdater`, `ProfileView.Flags` and LiteDB (`flagCounts`, `flags`), every test named in the old section 15.4, and the fold into the spec (section 15 is now a pointer).
+- Decisions D27 lists the readings made where the spec was silent. Two to look at in review: a mixed message such as `:) >.>` becomes a reaction with no tone, and `:3 >.>` goes to the model (it contains a digit). Seven existing tests were rewritten because the default reply form changed: three parser tests and four client tests (listed in D27).
+- Not changed: the engine itself. It already handled a reaction result with an empty tone list; only `MatchReaction` changed.
+- The Dalamud project does not exist yet, so nothing there needed changing.
 
 ## Milestone 5b review
 

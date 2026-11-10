@@ -84,6 +84,7 @@ public sealed class InMemoryProfileStore : IProfileStore
         ChannelCounts = new(p.ChannelCounts),
         ToneCounts = new(p.ToneCounts),
         IntentCounts = new(p.IntentCounts),
+        FlagCounts = new(p.FlagCounts),
         LanguageCounts = new(p.LanguageCounts),
         TopicCounts = new(p.TopicCounts),
         ActivityByHourOfWeekUtc = (int[])p.ActivityByHourOfWeekUtc.Clone(),

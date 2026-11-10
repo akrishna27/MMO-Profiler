@@ -57,21 +57,28 @@ public class LabelSetTests
             new[] { "Neutral", "Friendly", "Humorous", "Excited", "Formal", "Sarcastic", "Frustrated", "Hostile", "Sad", "Flirtatious" },
             set.Tones.Select(l => l.Id));
         Assert.Equal("Reaction", set.ReactionIntent);
-        Assert.All(set.Intents.Concat(set.Tones), l => Assert.False(string.IsNullOrWhiteSpace(l.Definition), l.Id));
+        Assert.Equal(["Adult"], set.Flags.Select(l => l.Id));
+        Assert.Equal("Sexually explicit content.", set.Flags[0].Definition);
+        Assert.Empty(set.Flags[0].Examples);
+        Assert.All(set.Intents.Concat(set.Tones).Concat(set.Flags), l => Assert.False(string.IsNullOrWhiteSpace(l.Definition), l.Id));
         Assert.Empty(set.Intents.Single(l => l.Id == "Other").Examples);
         Assert.Equal(["lol how was your weekend"], set.Intents.Single(l => l.Id == "Socializing").Examples);
 
-        // Every pattern of the starting table, with the tone it must give.
+        // Every pattern of the starting table, with the tone it must give. No two patterns share a
+        // normal form, so "!!" stands for any run of "!", "?" for any run of "?" and "..." for any run of dots.
         var expected = new Dictionary<string, string[]>
         {
-            ["Friendly"] = [":)", ":-)", "(:", ":3", "^^", "^_^", "^-^", "o/", "\\o", "<3", "uwu", "o7"],
+            ["Friendly"] = [":)", ":-)", "(:", ":3", "^^", "^_^", "^-^", "o/", "\\o", "<3", "uwu", "owo", "o7"],
             ["Humorous"] = ["xD", ":P", ";P", "lol", "lmao", "haha", "kek"],
-            ["Excited"] = [":D", "\\o/", "!!", "!!!"],
+            ["Excited"] = [":D", "\\o/", "!!"],
             ["Sad"] = [":(", ":'(", ":c", "T_T", "T.T", ";_;", "D:"],
             ["Frustrated"] = ["x.x", "x_x", ">.<", ">_<", "-_-", "-.-", "ugh"],
             ["Flirtatious"] = [";)", ";-)", ":*"],
-            ["Neutral"] = ["?", "??", "...", "o.o", "o_o", "._."],
+            ["Neutral"] = ["?", "...", "o.o", "o_o", "._."],
         };
+        Assert.Equal(
+            expected.Values.Sum(v => v.Length),
+            expected.Values.SelectMany(v => v).Select(LabelSet.NormalForm).Distinct().Count());
         foreach (var (tone, patterns) in expected)
             foreach (var pattern in patterns)
                 Assert.Equal([tone], set.MatchReaction(pattern));
@@ -207,6 +214,27 @@ public class LabelSetTests
         Assert.Contains("more than once", ex.Message);
     }
 
+    [Theory]
+    [InlineData(":)", ":))")]          // a repeated character
+    [InlineData("xD", "XDD")]          // case and a repeat together
+    [InlineData("!!", "!")]            // the shortest and a longer run
+    [InlineData("lol", "LOOOL")]
+    [InlineData("...", "..")]
+    public void Parse_RejectsPatternsWithTheSameNormalForm(string first, string second)
+    {
+        var ex = Assert.Throws<LabelFileException>(() => LabelSet.Parse(WithReactionPatterns(first, second)));
+        Assert.Contains("more than once", ex.Message);
+
+        // The same across two reaction entries.
+        Assert.Throws<LabelFileException>(() => LabelSet.Parse(Json(
+            Labels("Chat", "Reaction"), Labels("Warm", "Plain"),
+            reactions: "[{\"tones\":[\"Warm\"],\"patterns\":[" + System.Text.Json.JsonSerializer.Serialize(first)
+                       + "]},{\"tones\":[\"Plain\"],\"patterns\":[" + System.Text.Json.JsonSerializer.Serialize(second) + "]}]")));
+
+        // Patterns that differ in more than that are fine.
+        LabelSet.Parse(WithReactionPatterns(first, "ok"));
+    }
+
     [Fact]
     public void Parse_AcceptsAPatternAtTheLengthLimit()
     {
@@ -222,6 +250,74 @@ public class LabelSetTests
     public void Parse_RejectsMalformedOrUnversionedFiles(string json)
     {
         Assert.Throws<LabelFileException>(() => LabelSet.Parse(json));
+    }
+
+    // ---- flags ----
+
+    private static readonly string MinimalWithFlags = Minimal
+        .Replace("\"reactionIntent\": \"Reaction\",",
+            "\"flags\": [{ \"id\": \"Adult\", \"definition\": \"Explicit.\", \"examples\": [\"x\"] }, { \"id\": \"Rude\", \"definition\": \"Rude.\" }],\n  \"reactionIntent\": \"Reaction\",")
+        .Replace("\"tones\": { \"Friendly\": \"Warm\" } }", "\"tones\": { \"Friendly\": \"Warm\" }, \"flags\": { \"Explicit\": \"Adult\" } }");
+
+    private static string JsonWithFlags(string flags, string aliases = "{}") =>
+        $$"""
+        {"version":1,"intents":{{Labels("Chat", "Reaction")}},"tones":{{OneTone}},"flags":{{flags}},"aliases":{{aliases}},"reactionIntent":"Reaction","reactions":[]}
+        """;
+
+    [Fact]
+    public void Parse_FlagsAreOptional_AndValidatedLikeLabels()
+    {
+        // No "flags" at all is valid and means no flags.
+        Assert.Empty(LabelSet.Parse(Minimal).Flags);
+        Assert.Empty(LabelSet.Parse(JsonWithFlags("[]")).Flags);
+
+        var set = LabelSet.Parse(MinimalWithFlags);
+        Assert.Equal(["Adult", "Rude"], set.Flags.Select(l => l.Id));
+        Assert.Equal("Explicit.", set.Flags[0].Definition);
+        Assert.Equal(["x"], set.Flags[0].Examples);
+
+        // The same rules as intents and tones.
+        var dup = Assert.Throws<LabelFileException>(() => LabelSet.Parse(JsonWithFlags(Labels("Adult", "adult"))));
+        Assert.Contains("more than once", dup.Message);
+        var reserved = Assert.Throws<LabelFileException>(() => LabelSet.Parse(JsonWithFlags(Labels("Unknown"))));
+        Assert.Contains("reserved", reserved.Message);
+        var badId = Assert.Throws<LabelFileException>(() => LabelSet.Parse(JsonWithFlags(Labels("Not Valid"))));
+        Assert.Contains("not a valid id", badId.Message);
+        Assert.Throws<LabelFileException>(() => LabelSet.Parse(JsonWithFlags("\"Adult\"")));      // not a list
+        Assert.Throws<LabelFileException>(() => LabelSet.Parse(JsonWithFlags("[\"Adult\"]")));    // entries must be objects
+
+        // An id may repeat across lists: they are separate lists.
+        LabelSet.Parse(JsonWithFlags(Labels("Chat")));
+
+        // Flag aliases: the target must be a flag, and the key must not be a current flag id.
+        var toMissing = Assert.Throws<LabelFileException>(() => LabelSet.Parse(
+            JsonWithFlags(Labels("Adult"), "{\"flags\":{\"Old\":\"Nowhere\"}}")));
+        Assert.Contains("not a current id", toMissing.Message);
+        Assert.Throws<LabelFileException>(() => LabelSet.Parse(
+            JsonWithFlags(Labels("Adult"), "{\"flags\":{\"Old\":\"Chat\"}}"))); // an intent id is not a flag
+        var isCurrent = Assert.Throws<LabelFileException>(() => LabelSet.Parse(
+            JsonWithFlags(Labels("Adult", "Rude"), "{\"flags\":{\"rude\":\"Adult\"}}")));
+        Assert.Contains("also a current id", isCurrent.Message);
+        Assert.Throws<LabelFileException>(() => LabelSet.Parse( // flag aliases need flags to point at
+            Json(Labels("Chat", "Reaction"), OneTone, aliases: "{\"flags\":{\"Old\":\"Adult\"}}")));
+    }
+
+    [Fact]
+    public void ResolveFlag_IsCaseInsensitive_AndAppliesAliases()
+    {
+        var set = LabelSet.Parse(MinimalWithFlags);
+
+        Assert.Equal("Adult", set.ResolveFlag("adult"));
+        Assert.Equal("Adult", set.ResolveFlag("  ADULT \n"));
+        Assert.Equal("Adult", set.ResolveFlag("explicit"));      // alias, any case
+        Assert.Equal("Rude", set.ResolveFlag("rUdE"));
+        Assert.Null(set.ResolveFlag("Chat"));                    // an intent id is not a flag
+        Assert.Null(set.ResolveFlag("Warm"));
+        Assert.Null(set.ResolveFlag("Unknown"));
+        Assert.Null(set.ResolveFlag(""));
+        Assert.Null(set.ResolveFlag(null));
+        Assert.Null(set.ResolveIntent("Adult"));                 // and a flag id is not an intent
+        Assert.Null(LabelSet.Parse(Minimal).ResolveFlag("Adult"));
     }
 
     // ---- resolving ----
@@ -304,6 +400,67 @@ public class LabelSetTests
         Assert.Equal(["Plain", "Warm"], set.MatchReaction("x.x :) x.x :3")); // order of first appearance
     }
 
+    [Theory]
+    [InlineData(":)))", "Friendly")]
+    [InlineData("xDDD", "Humorous")]
+    [InlineData("LOOOOL", "Humorous")]
+    [InlineData("ughhh", "Frustrated")]
+    [InlineData("!!!!", "Excited")]
+    [InlineData("???", "Neutral")]
+    [InlineData("XD", "Humorous")]
+    [InlineData(":DDDD", "Excited")]
+    [InlineData("uwuuu", "Friendly")]
+    public void MatchReaction_UsesNormalForm(string text, string expectedTone)
+    {
+        Assert.Equal([expectedTone], LabelSet.Default.MatchReaction(text));
+    }
+
+    [Fact]
+    public void NormalForm_LowerCasesAndCollapsesRepeatedCharacters()
+    {
+        Assert.Equal(":)", LabelSet.NormalForm(":)))"));
+        Assert.Equal("xd", LabelSet.NormalForm("XDdd"));
+        Assert.Equal("lol", LabelSet.NormalForm("LOOOOL"));
+        Assert.Equal("haha", LabelSet.NormalForm("haha"));      // only runs of the same character collapse
+        Assert.Equal(".", LabelSet.NormalForm("..."));
+        Assert.Equal("", LabelSet.NormalForm(""));
+    }
+
+    [Theory]
+    [InlineData(">.>")]
+    [InlineData("~")]
+    [InlineData("<.<")]
+    [InlineData("  >.>   ~ ")]
+    [InlineData("♥")]            // a symbol that is neither a letter nor a digit
+    [InlineData("\U0001F600")]        // an emoji (a surrogate pair)
+    public void MatchReaction_SymbolOnlyTextNotInTable_ReturnsEmptyList(string text)
+    {
+        var tones = LabelSet.Default.MatchReaction(text);
+
+        Assert.NotNull(tones);
+        Assert.Empty(tones);
+    }
+
+    [Theory]
+    [InlineData(">w<")]
+    [InlineData("hello")]
+    [InlineData("x3")]
+    [InlineData("<3 hello")]
+    [InlineData("o7 7")]               // a digit that is not part of a pattern
+    [InlineData("/wave")]
+    [InlineData("こんにちは")] // Japanese letters
+    public void MatchReaction_TextWithLettersNotInTable_ReturnsNull(string text)
+    {
+        Assert.Null(LabelSet.Default.MatchReaction(text));
+    }
+
+    [Fact]
+    public void MatchReaction_SymbolOnlyRule_StillObeysTheLengthLimit()
+    {
+        Assert.Null(LabelSet.Default.MatchReaction(new string('~', 33)));
+        Assert.NotNull(LabelSet.Default.MatchReaction(new string('~', 32)));
+    }
+
     [Fact]
     public void MatchReaction_DefaultTable_FollowsTheTypeOfEmote()
     {
@@ -342,6 +499,29 @@ public class LabelSetTests
         {
             Assert.NotEqual(Minimal, changed);
             Assert.NotEqual(a.Fingerprint, LabelSet.Parse(changed).Fingerprint);
+        }
+    }
+
+    [Fact]
+    public void Fingerprint_ChangesWhenFlagsChange()
+    {
+        var withFlags = LabelSet.Parse(MinimalWithFlags);
+
+        Assert.Equal(withFlags.Fingerprint, LabelSet.Parse(MinimalWithFlags).Fingerprint);
+        Assert.NotEqual(LabelSet.Parse(Minimal).Fingerprint, withFlags.Fingerprint);   // adding flags
+
+        string[] changes =
+        [
+            MinimalWithFlags.Replace("\"definition\": \"Explicit.\"", "\"definition\": \"Graphic.\""),   // a flag definition
+            MinimalWithFlags.Replace("\"examples\": [\"x\"]", "\"examples\": [\"y\"]"),                  // a flag example
+            MinimalWithFlags.Replace("\"id\": \"Rude\"", "\"id\": \"Crude\""),                           // a flag id
+            MinimalWithFlags.Replace("\"Explicit\": \"Adult\"", "\"Graphic\": \"Adult\""),               // a flag alias
+            MinimalWithFlags.Replace("{ \"id\": \"Rude\", \"definition\": \"Rude.\" }", ""),             // a flag removed
+        ];
+        foreach (var changed in changes)
+        {
+            Assert.NotEqual(MinimalWithFlags, changed);
+            Assert.NotEqual(withFlags.Fingerprint, LabelSet.Parse(changed).Fingerprint); // a trailing comma is tolerated
         }
     }
 

@@ -77,15 +77,16 @@ public sealed class OllamaClient : IMessageAnalyzer, IProfileSummarizer
         var body = ChatRequest(
             BuildClassificationSystemPrompt(labels, options),
             items.ToJsonString(PromptJson),
-            ClassificationSchema(labels));
+            ClassificationSchema(labels, options));
 
         var content = await ChatAsync(body, ct).ConfigureAwait(false);
         return AnalysisResponseParser.Parse(content, messages.Count, labels, options);
     }
 
     /// <summary>
-    /// The fixed instructions, the label limits, then every intent and tone as <c>Id: definition</c>
-    /// with up to <see cref="ProfilerOptions.LabelExamplesInPrompt"/> examples.
+    /// The fixed instructions, the label limits, then every intent, tone and flag as <c>Id: definition</c>
+    /// with up to <see cref="ProfilerOptions.LabelExamplesInPrompt"/> examples. The reaction intent is
+    /// never listed: only code assigns it (decision D26). A label set with no flags has no flag section.
     /// </summary>
     public static string BuildClassificationSystemPrompt(LabelSet labels, ProfilerOptions options)
     {
@@ -95,12 +96,23 @@ public sealed class OllamaClient : IMessageAnalyzer, IProfileSummarizer
         var sb = new StringBuilder(ClassificationInstructions);
         sb.Append(" Give at most ").Append(Plural(options.MaxIntentsPerMessage, "intent"))
           .Append(" and at most ").Append(Plural(options.MaxTonesPerMessage, "tone"))
-          .Append(" per message, strongest first, each with a confidence from 0 to 1.")
+          .Append(" per message, strongest first")
+          .Append(options.IncludeLabelConfidence ? ", each with a confidence from 0 to 1." : ".")
           .Append(" Include a second label only when it clearly applies.");
-        AppendLabels(sb, "Intents", labels.Intents, options.LabelExamplesInPrompt);
+        AppendLabels(sb, "Intents", OfferedIntents(labels), options.LabelExamplesInPrompt);
         AppendLabels(sb, "Tones", labels.Tones, options.LabelExamplesInPrompt);
+        if (labels.Flags.Count > 0)
+        {
+            sb.AppendLine().AppendLine()
+              .Append("Give every flag that applies to the message; most messages have none.");
+            AppendLabels(sb, "Flags", labels.Flags, options.LabelExamplesInPrompt);
+        }
         return sb.ToString();
     }
+
+    // The reaction intent is assigned by code only, so the model is never offered it.
+    private static List<LabelDefinition> OfferedIntents(LabelSet labels) =>
+        labels.Intents.Where(l => !string.Equals(l.Id, labels.ReactionIntent, StringComparison.Ordinal)).ToList();
 
     private static string Plural(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
@@ -118,10 +130,41 @@ public sealed class OllamaClient : IMessageAnalyzer, IProfileSummarizer
         }
     }
 
-    /// <summary>The <c>format</c> schema for classification, with the label enums built from the label set.</summary>
-    public static JsonObject ClassificationSchema(LabelSet labels)
+    public const int MaxTopicsInReply = 3;
+
+    /// <summary>
+    /// The <c>format</c> schema for classification, with the label enums built from the label set.
+    /// <c>intents</c> and <c>tones</c> have at least one and at most the configured number of entries;
+    /// <c>flags</c> (only when the label set has flags) may be empty. Entries are plain label ids, or
+    /// <c>{label, confidence}</c> objects when <see cref="ProfilerOptions.IncludeLabelConfidence"/> is on.
+    /// </summary>
+    public static JsonObject ClassificationSchema(LabelSet labels, ProfilerOptions options)
     {
         ArgumentNullException.ThrowIfNull(labels);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var properties = new JsonObject
+        {
+            ["id"] = new JsonObject { ["type"] = "integer" },
+            ["intents"] = LabelListSchema(OfferedIntents(labels), 1, Math.Max(1, options.MaxIntentsPerMessage), options.IncludeLabelConfidence),
+            ["tones"] = LabelListSchema(labels.Tones, 1, Math.Max(1, options.MaxTonesPerMessage), options.IncludeLabelConfidence),
+        };
+        var required = new JsonArray("id", "intents", "tones");
+        if (labels.Flags.Count > 0)
+        {
+            properties["flags"] = LabelListSchema(labels.Flags, 0, labels.Flags.Count, confidence: false);
+            required.Add("flags");
+        }
+        properties["language"] = new JsonObject { ["type"] = "string" };
+        properties["topics"] = new JsonObject
+        {
+            ["type"] = "array",
+            ["items"] = new JsonObject { ["type"] = "string" },
+            ["maxItems"] = MaxTopicsInReply,
+        };
+        required.Add("language");
+        required.Add("topics");
+
         return new JsonObject
         {
             ["type"] = "object",
@@ -134,43 +177,37 @@ public sealed class OllamaClient : IMessageAnalyzer, IProfileSummarizer
                     ["items"] = new JsonObject
                     {
                         ["type"] = "object",
-                        ["required"] = new JsonArray("id", "intents", "tones", "language", "topics"),
-                        ["properties"] = new JsonObject
-                        {
-                            ["id"] = new JsonObject { ["type"] = "integer" },
-                            ["intents"] = LabelListSchema(labels.Intents),
-                            ["tones"] = LabelListSchema(labels.Tones),
-                            ["language"] = new JsonObject { ["type"] = "string" },
-                            ["topics"] = new JsonObject
-                            {
-                                ["type"] = "array",
-                                ["items"] = new JsonObject { ["type"] = "string" },
-                            },
-                        },
+                        ["required"] = required,
+                        ["properties"] = properties,
                     },
                 },
             },
         };
     }
 
-    private static JsonObject LabelListSchema(IReadOnlyList<LabelDefinition> labels)
+    private static JsonObject LabelListSchema(IReadOnlyList<LabelDefinition> labels, int minItems, int maxItems, bool confidence)
     {
         var ids = new JsonArray();
         foreach (var l in labels) ids.Add(l.Id);
-        return new JsonObject
-        {
-            ["type"] = "array",
-            ["items"] = new JsonObject
+        var label = new JsonObject { ["type"] = "string", ["enum"] = ids };
+
+        JsonObject items = confidence
+            ? new JsonObject
             {
                 ["type"] = "object",
                 ["required"] = new JsonArray("label", "confidence"),
                 ["properties"] = new JsonObject
                 {
-                    ["label"] = new JsonObject { ["type"] = "string", ["enum"] = ids },
+                    ["label"] = label,
                     ["confidence"] = new JsonObject { ["type"] = "number" },
                 },
-            },
-        };
+            }
+            : label;
+
+        var list = new JsonObject { ["type"] = "array", ["items"] = items };
+        if (minItems > 0) list["minItems"] = minItems;
+        list["maxItems"] = maxItems;
+        return list;
     }
 
     // ---- summaries ----

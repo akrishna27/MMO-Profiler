@@ -16,8 +16,8 @@ public sealed class LabelFileException : Exception
 }
 
 /// <summary>
-/// The parsed label file (spec section 6.7): the intents and tones, the intent used for emote-only
-/// messages, aliases for retired ids, and the emoticon table. Immutable. Labels are data, so no label
+/// The parsed label file (spec section 5.5): the intents, tones and flags, the intent used for
+/// reactions, aliases for retired ids, and the emoticon table. Immutable. Labels are data, so no label
 /// id appears in code; the reaction intent is named by the file itself.
 /// </summary>
 public sealed class LabelSet
@@ -32,29 +32,35 @@ public sealed class LabelSet
 
     private readonly Dictionary<string, string> _intentLookup;   // lower-case id or alias -> canonical id
     private readonly Dictionary<string, string> _toneLookup;
-    private readonly Dictionary<string, IReadOnlyList<string>> _patternTones; // pattern (ignoring case) -> canonical tone ids
+    private readonly Dictionary<string, string> _flagLookup;
+    private readonly Dictionary<string, IReadOnlyList<string>> _patternTones; // normal form of a pattern -> canonical tone ids
     private readonly IReadOnlyDictionary<string, string> _intentAliases;
     private readonly IReadOnlyDictionary<string, string> _toneAliases;
+    private readonly IReadOnlyDictionary<string, string> _flagAliases;
     private readonly IReadOnlyList<ReactionDefinition> _reactions;
 
     private LabelSet(
-        IReadOnlyList<LabelDefinition> intents, IReadOnlyList<LabelDefinition> tones,
+        IReadOnlyList<LabelDefinition> intents, IReadOnlyList<LabelDefinition> tones, IReadOnlyList<LabelDefinition> flags,
         IReadOnlyDictionary<string, string> intentAliases, IReadOnlyDictionary<string, string> toneAliases,
+        IReadOnlyDictionary<string, string> flagAliases,
         string reactionIntent, IReadOnlyList<ReactionDefinition> reactions)
     {
         Intents = intents;
         Tones = tones;
+        Flags = flags;
         ReactionIntent = reactionIntent;
         _intentAliases = intentAliases;
         _toneAliases = toneAliases;
+        _flagAliases = flagAliases;
         _reactions = reactions;
         _intentLookup = BuildLookup(intents, intentAliases);
         _toneLookup = BuildLookup(tones, toneAliases);
+        _flagLookup = BuildLookup(flags, flagAliases);
 
-        _patternTones = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        _patternTones = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         foreach (var r in reactions)
             foreach (var pattern in r.Patterns)
-                _patternTones[pattern] = r.Tones;
+                _patternTones[NormalForm(pattern)] = r.Tones;
 
         Fingerprint = ComputeFingerprint();
     }
@@ -64,7 +70,16 @@ public sealed class LabelSet
 
     public IReadOnlyList<LabelDefinition> Tones { get; }
 
-    /// <summary>The intent given to emote-only messages. One of <see cref="Intents"/>.</summary>
+    /// <summary>
+    /// Yes/no attributes of a message, independent of intent and tone (for example adult content).
+    /// Ordered as in the file; empty when the file has no <c>flags</c>.
+    /// </summary>
+    public IReadOnlyList<LabelDefinition> Flags { get; }
+
+    /// <summary>
+    /// The intent given to reactions. One of <see cref="Intents"/>. Only code assigns it: it is never
+    /// offered to the model.
+    /// </summary>
     public string ReactionIntent { get; }
 
     /// <summary>
@@ -82,9 +97,29 @@ public sealed class LabelSet
     /// <summary>Trims, matches ignoring case, applies aliases. Returns the canonical id or null.</summary>
     public string? ResolveTone(string? label) => Resolve(_toneLookup, label);
 
+    /// <summary>Trims, matches ignoring case, applies aliases. Returns the canonical id or null.</summary>
+    public string? ResolveFlag(string? label) => Resolve(_flagLookup, label);
+
     /// <summary>
-    /// If the whole message is made of known emoticons (typed text, not game emotes), returns their
-    /// distinct tones in order of first appearance. Otherwise null.
+    /// The normal form used to compare emoticons: lower-case, with every run of the same character
+    /// collapsed to one. So <c>:)))</c> and <c>:)</c> are the same, as are <c>xDDD</c> and <c>xD</c>.
+    /// </summary>
+    public static string NormalForm(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var lower = text.ToLowerInvariant();
+        var sb = new StringBuilder(lower.Length);
+        foreach (var c in lower)
+            if (sb.Length == 0 || sb[^1] != c) sb.Append(c);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Decides whether a message is a reaction (typed emoticons, not game emotes). Null means it is not.
+    /// Otherwise the result is the tones to give it, possibly an empty list:
+    /// trim (empty or over 32 characters: null); if every whitespace-separated token's normal form is in
+    /// the table, the distinct tones in order of first appearance; otherwise, if the text has no letter
+    /// and no digit at all, an empty list (an emoticon the table does not know); otherwise null.
     /// </summary>
     public IReadOnlyList<string>? MatchReaction(string? text)
     {
@@ -93,13 +128,16 @@ public sealed class LabelSet
         if (trimmed.Length == 0 || trimmed.Length > MaxReactionTextLength) return null;
 
         var tones = new List<string>();
+        var allKnown = true;
         foreach (var token in trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (!_patternTones.TryGetValue(token, out var matched)) return null;
+            if (!_patternTones.TryGetValue(NormalForm(token), out var matched)) { allKnown = false; break; }
             foreach (var tone in matched)
                 if (!tones.Contains(tone, StringComparer.Ordinal)) tones.Add(tone);
         }
-        return tones;
+        if (allKnown) return tones;
+
+        return trimmed.Any(char.IsLetterOrDigit) ? null : Array.Empty<string>();
     }
 
     private static string? Resolve(Dictionary<string, string> lookup, string? label)
@@ -144,20 +182,23 @@ public sealed class LabelSet
                 || !version.TryGetInt32(out var v) || v != SupportedVersion)
                 throw new LabelFileException($"The label file must have \"version\": {SupportedVersion}.");
 
-            var intents = ParseLabels(root, "intents");
-            var tones = ParseLabels(root, "tones");
+            var intents = ParseLabels(root, "intents", required: true);
+            var tones = ParseLabels(root, "tones", required: true);
+            var flags = ParseLabels(root, "flags", required: false);
 
             var intentIds = new HashSet<string>(intents.Select(l => l.Id), StringComparer.OrdinalIgnoreCase);
             var toneIds = new HashSet<string>(tones.Select(l => l.Id), StringComparer.OrdinalIgnoreCase);
 
             var intentAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var toneAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var flagAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (root.TryGetProperty("aliases", out var aliases))
             {
                 if (aliases.ValueKind != JsonValueKind.Object)
-                    throw new LabelFileException("\"aliases\" must be an object with \"intents\" and \"tones\".");
+                    throw new LabelFileException("\"aliases\" must be an object with \"intents\", \"tones\" and \"flags\".");
                 ParseAliases(aliases, "intents", intents, intentAliases);
                 ParseAliases(aliases, "tones", tones, toneAliases);
+                ParseAliases(aliases, "flags", flags, flagAliases);
             }
 
             if (!root.TryGetProperty("reactionIntent", out var ri) || ri.ValueKind != JsonValueKind.String)
@@ -168,14 +209,19 @@ public sealed class LabelSet
 
             var reactions = ParseReactions(root, tones, toneAliases);
 
-            return new LabelSet(intents, tones, intentAliases, toneAliases, reactionIntent, reactions);
+            return new LabelSet(intents, tones, flags, intentAliases, toneAliases, flagAliases, reactionIntent, reactions);
         }
     }
 
-    private static List<LabelDefinition> ParseLabels(JsonElement root, string listName)
+    private static List<LabelDefinition> ParseLabels(JsonElement root, string listName, bool required)
     {
-        if (!root.TryGetProperty(listName, out var list) || list.ValueKind != JsonValueKind.Array)
+        if (!root.TryGetProperty(listName, out var list))
+        {
+            if (!required) return new List<LabelDefinition>();
             throw new LabelFileException($"The label file needs a \"{listName}\" list.");
+        }
+        if (list.ValueKind != JsonValueKind.Array)
+            throw new LabelFileException($"\"{listName}\" must be a list.");
 
         var result = new List<LabelDefinition>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -207,7 +253,7 @@ public sealed class LabelSet
             result.Add(new LabelDefinition(id, Str(item, "definition")?.Trim() ?? "", examples));
         }
 
-        if (result.Count == 0)
+        if (required && result.Count == 0)
             throw new LabelFileException($"The label file needs at least one entry in \"{listName}\".");
         return result;
     }
@@ -247,7 +293,9 @@ public sealed class LabelSet
         if (list.ValueKind != JsonValueKind.Array)
             throw new LabelFileException("\"reactions\" must be a list.");
 
-        var seenPatterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Patterns are compared by normal form, so two that differ only in case or in repeated
+        // characters are the same pattern.
+        var seenPatterns = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var item in list.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
@@ -283,8 +331,10 @@ public sealed class LabelSet
                         throw new LabelFileException($"The reaction pattern \"{pattern}\" is longer than {MaxPatternLength} characters.");
                     if (pattern.Any(char.IsWhiteSpace))
                         throw new LabelFileException($"The reaction pattern \"{pattern}\" contains whitespace.");
-                    if (!seenPatterns.Add(pattern))
-                        throw new LabelFileException($"The reaction pattern \"{pattern}\" appears more than once (patterns are not case sensitive).");
+                    if (!seenPatterns.TryAdd(NormalForm(pattern), pattern))
+                        throw new LabelFileException(
+                            $"The reaction pattern \"{pattern}\" appears more than once: it is the same as " +
+                            $"\"{seenPatterns[NormalForm(pattern)]}\", because patterns ignore case and repeated characters.");
                     patterns.Add(pattern);
                 }
             }
@@ -340,8 +390,10 @@ public sealed class LabelSet
 
         AddLabels("intents", Intents);
         AddLabels("tones", Tones);
+        AddLabels("flags", Flags);
         AddAliases("intentAliases", _intentAliases);
         AddAliases("toneAliases", _toneAliases);
+        AddAliases("flagAliases", _flagAliases);
         Add("reactionIntent");
         Add(ReactionIntent);
         Add("reactions");

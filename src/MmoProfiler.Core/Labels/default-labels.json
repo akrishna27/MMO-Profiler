@@ -26,15 +26,18 @@
     { "id": "Sad", "definition": "Down, disappointed or apologetic.", "examples": ["sorry, I keep messing this up"] },
     { "id": "Flirtatious", "definition": "Romantic or suggestive.", "examples": ["well hello there, handsome"] }
   ],
-  "aliases": { "intents": {}, "tones": {} },
+  "flags": [
+    { "id": "Adult", "definition": "Sexually explicit content.", "examples": [] }
+  ],
+  "aliases": { "intents": {}, "tones": {}, "flags": {} },
   "reactionIntent": "Reaction",
   "reactions": [
-    { "tones": ["Friendly"], "patterns": [":)", ":-)", "(:", ":3", "^^", "^_^", "^-^", "o/", "\\o", "<3", "uwu", "o7"] },
+    { "tones": ["Friendly"], "patterns": [":)", ":-)", "(:", ":3", "^^", "^_^", "^-^", "o/", "\\o", "<3", "uwu", "owo", "o7"] },
     { "tones": ["Humorous"], "patterns": ["xD", ":P", ";P", "lol", "lmao", "haha", "kek"] },
-    { "tones": ["Excited"], "patterns": [":D", "\\o/", "!!", "!!!"] },
+    { "tones": ["Excited"], "patterns": [":D", "\\o/", "!!"] },
     { "tones": ["Sad"], "patterns": [":(", ":'(", ":c", "T_T", "T.T", ";_;", "D:"] },
     { "tones": ["Frustrated"], "patterns": ["x.x", "x_x", ">.<", ">_<", "-_-", "-.-", "ugh"] },
     { "tones": ["Flirtatious"], "patterns": [";)", ";-)", ":*"] },
-    { "tones": ["Neutral"], "patterns": ["?", "??", "...", "o.o", "o_o", "._."] }
+    { "tones": ["Neutral"], "patterns": ["?", "...", "o.o", "o_o", "._."] }
   ]
 }

@@ -756,6 +756,78 @@ public class ProfilerEngineTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Cycle_SymbolOnlyMessageNotInTable_IsAReactionWithNoTone_WithoutCallingTheAnalyzer()
+    {
+        _options = _options with { StoreRawMessages = true };
+        _intake.Accept(M(Alice, ">.>"));
+        _intake.Accept(M(Alice, "~"));
+
+        await Cycle();
+
+        Assert.Empty(_analyzer.Calls);
+        var a = _service.Get(Alice)!;
+        Assert.Equal(2, a.MessageCount);
+        Assert.Equal(2, a.AnalyzedCount);                        // the reaction intent alone makes it labelled
+        Assert.Equal(2, a.IntentCounts[_labels.ReactionIntent]);
+        Assert.Empty(a.ToneCounts);                              // no tone: the emoticon is unknown
+        Assert.Empty(a.LanguageCounts);
+        Assert.Equal(2, _engine.Status.Analyzed);
+        var logged = _log.GetRecent(Alice, 10).ToDictionary(l => l.Message.Text);
+        Assert.Equal(new[] { _labels.ReactionIntent }, logged[">.>"].Analysis.Intents);
+        Assert.Empty(logged[">.>"].Analysis.Tones);
+        Assert.Equal("und", logged[">.>"].Analysis.Language);
+        Assert.Empty(logged[">.>"].Analysis.Flags);
+    }
+
+    [Fact]
+    public async Task Cycle_ReactionVariants_MatchByNormalForm()
+    {
+        _intake.Accept(M(Alice, ":)))"));
+        _intake.Accept(M(Alice, "xDDD"));
+        _intake.Accept(M(Bob, "looool"));
+        _intake.Accept(M(Bob, "UGHHH"));
+        _intake.Accept(M(Bob, "!!!!!"));
+
+        await Cycle();
+
+        Assert.Empty(_analyzer.Calls);
+        var a = _service.Get(Alice)!;
+        Assert.Equal(2, a.IntentCounts[_labels.ReactionIntent]);
+        Assert.Equal(1, a.ToneCounts["Friendly"]);
+        Assert.Equal(1, a.ToneCounts["Humorous"]);
+        var b = _service.Get(Bob)!;
+        Assert.Equal(3, b.IntentCounts[_labels.ReactionIntent]);
+        Assert.Equal(1, b.ToneCounts["Humorous"]);
+        Assert.Equal(1, b.ToneCounts["Frustrated"]);
+        Assert.Equal(1, b.ToneCounts["Excited"]);
+    }
+
+    [Fact]
+    public async Task Cycle_FlagsFromTheModel_AreCountedAndLogged()
+    {
+        _options = _options with { StoreRawMessages = true };
+        _analyzer.Handler = (_, chunk) => chunk
+            .Select(m => new MessageAnalysis(new[] { "Socializing" }, new[] { "Flirtatious" }, "en", Array.Empty<string>())
+            {
+                Flags = m.Text.Contains("spicy") ? new[] { "Adult" } : Array.Empty<string>(),
+            })
+            .ToList();
+        _intake.Accept(M(Alice, "something spicy"));
+        _intake.Accept(M(Alice, "something tame"));
+        _intake.Accept(M(Alice, "more spicy"));
+
+        await Cycle();
+
+        var a = _service.Get(Alice)!;
+        Assert.Equal(3, a.AnalyzedCount);
+        Assert.Equal(2, a.FlagCounts["Adult"]);
+        Assert.Equal(3, a.ToneCounts["Flirtatious"]);
+        var logged = _log.GetRecent(Alice, 10).ToDictionary(l => l.Message.Text);
+        Assert.Equal(new[] { "Adult" }, logged["something spicy"].Analysis.Flags);
+        Assert.Empty(logged["something tame"].Analysis.Flags);
+    }
+
+    [Fact]
     public async Task Cycle_ReactionMessages_AreStillRecordedAndBuffered()
     {
         _intake.Accept(M(Alice, ":3"));
