@@ -228,3 +228,20 @@ Readings where the spec was silent:
 - **Signatures changed.** `OllamaClient(http, options, labels, time)`, `ProfilerEngine(intake, profiles, analyzer, summarizer, options, labels, time, log)` and `ProfileView.From(profile, offset, labels)`. `OllamaClient.ClassificationSystemPrompt` became `BuildClassificationSystemPrompt(labels, options)`.
 - **Message log** reads a missing `intents` or `tones` array as empty. No migration, as D24 said.
 
+## D26. Plain label lists, reactions by code only, and flags (2026-11-10)
+
+**Decision.** Agreed with the user after the milestone 5b probe.
+
+- **The model returns plain lists of label ids**, strongest first, with at least one and at most two of each enforced by the reply schema. Confidence numbers are off by default and kept only as an option (`IncludeLabelConfidence`) for the evaluation to try on other models.
+- **The reaction intent is never offered to the model.** Code assigns it: from the emoticon table, matched by a normal form that ignores case and repeated characters, or when a message contains no letters or digits at all.
+- **Flags are a third kind of label**, a yes/no attribute independent of intent and tone. The starting file has one flag, `Adult`.
+
+**Why.**
+- Measured on `llama3.2:3b` (see `docs/STATUS.md`, "Milestone 5b review"): the confidence wrapper doubled the time for a chunk of 20 messages (about 13.5 s against 6.5 to 7.9 s), single-label mode did not recover it, and 38 of 39 confidence values were 0.9, so the threshold did nothing. The user's priority is performance on machines with little VRAM.
+- The model labelled ordinary sentences as `Reaction`, which also discarded their language.
+- The user pointed out that people use endless variations of emoticons, so an exact-match table is not enough. The normal form catches lengthened variants and the no-letters-or-digits rule catches unknown symbol emoticons. Variants that contain letters and are not in the table (for example `>w<`) still go to the model as ordinary messages; the test-set extraction should list frequent short messages that miss the table so the user can extend it.
+- Adult content is very common in this game's chat. The user noted that if it had its own label, such a message would still need its ordinary labels to describe it. A flag records it without using an intent or tone slot, costs a few reply tokens, and being data it can be removed or added to by editing the label file.
+
+**To measure in the evaluation.** Whether a small model sets the `Adult` flag reliably, and whether explicit content degrades its other labels. Whether the time per chunk returns to the pre-5b figure.
+
+**Privacy note.** A per-character share of adult-flagged messages is sensitive. It stays on the user's machine like the rest of the profile, and it is one more reason the data must never leave it.

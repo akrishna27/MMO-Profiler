@@ -2,6 +2,8 @@
 
 Version 1.0, 2026-11-09. This document is the complete brief for implementing MMO-Profiler. Read all of it before writing code.
 
+> **Read section 15 as well.** It records milestone 5c, agreed on 2026-11-10, and supersedes sections 5.5 to 9.3 and 11 where they conflict, until it has been folded into them.
+
 ## 1. What we are building
 
 MMO-Profiler reads incoming chat in an MMO and builds a local profile of each character who speaks. A profile answers three questions: who is this person, what do they tend to talk about, and when are they usually chatting.
@@ -852,6 +854,7 @@ The in-flight tests below need fakes that block until the test releases them (fo
 | 4 | LiteDB storage | Storage tests pass |
 | 5 | `MmoProfiler.Games.Ffxiv` and `ProfileView` | Mapping and view tests pass |
 | 5b | Label redesign (decision D24): data-driven labels, several labels per message, emoticon-only messages | Done: folded into sections 5.5, 6.6, 7.1, 8, 9.3 and 11 |
+| 5c | Plain label lists, reactions assigned by code, flags (section 15) | Section 15 tests pass and the section is folded into sections 5 to 11 |
 | 6 | `MmoProfiler.Dalamud` plugin: hook, commands, context menu, windows, configuration | Builds against the installed Dalamud; manual checklist below passes |
 | 7 | README and CI | README covers setup; CI is green |
 
@@ -885,7 +888,64 @@ CI (`.github/workflows/ci.yml`): on push and pull request, on `windows-latest`, 
 - Export and import of profiles; merging profiles after a name change or world transfer.
 - World of Warcraft companion host.
 
-## 15. Label redesign (milestone 5b)
+## 15. Milestone 5c: plain label lists, reactions by code, flags
+
+Agreed with the user on 2026-11-10 (decision D26) after the milestone 5b probe. **This section supersedes sections 5.5, 6.6, 7.1, 8, 9.3 and 11 wherever they conflict.** Part of the work is to fold it into those sections and then reduce this section to a short pointer, as was done for milestone 5b.
+
+### 15.1 The model returns plain lists
+
+The reply for one message becomes:
+
+```json
+{ "id": 0, "intents": ["LookingForGroup"], "tones": ["Neutral", "Friendly"], "flags": [], "language": "en", "topics": ["raids"] }
+```
+
+- `intents` and `tones` are arrays of label ids, strongest first. The request schema gives each `minItems: 1` and `maxItems` equal to `MaxIntentsPerMessage` or `MaxTonesPerMessage`. `topics` gets `maxItems: 3`. (Ollama honours these limits; confirmed in the 5b probe.)
+- New option `IncludeLabelConfidence`, default `false`. When `true`, the client sends the 5b form (`{"label", "confidence"}` objects) and the prompt asks for a confidence; `LabelConfidenceThreshold` applies only then. It exists so the evaluation can test confidence on other models.
+- The prompt is built to match: with confidence off it asks for at most N intents and N tones, strongest first, and a second label only when it clearly applies, and does not mention confidence.
+- The parser accepts both forms, entry by entry: a string is a label with no confidence; an object is a label with a confidence.
+  - If no entry in a list has a numeric confidence: resolve, drop unresolved, drop repeats (first wins), keep the first N in the model's order.
+  - Otherwise the 5b rules apply unchanged (an entry without a numeric confidence counts as 0).
+
+### 15.2 The reaction intent is assigned only by code
+
+- The reaction intent is left out of the prompt and out of the schema enum. If a reply names it anyway (directly or through an alias), the parser drops that entry. The parser rule that set the language to `und` for reaction-only results is removed.
+- **Normal form** for matching emoticons: lower-case, and every run of the same character collapsed to one. So `:)))` matches `:)`, `xDDD` matches `xD`, `looool` matches `lol` and `ughhh` matches `ugh`. Patterns are compared by normal form; two patterns with the same normal form in the file are a `LabelFileException`.
+- `LabelSet.MatchReaction(text)` returns null (not a reaction) or a list of tones (possibly empty):
+  1. Trim. Empty or longer than 32 characters: null.
+  2. Split on whitespace. If every token's normal form is in the table: the distinct tones in order of first appearance.
+  3. Otherwise, if the text contains no letter and no digit at all (`char.IsLetterOrDigit` is false for every character): an empty list. This is an emoticon the table does not know, such as `>.>`; it gets the reaction intent and no tone.
+  4. Otherwise null.
+- The engine is unchanged apart from following these rules: a non-null result means intent = reaction intent, tones = the result (capped), language `und`, no flags, no topics, no model call.
+- The starting table changes so that no two patterns share a normal form: `!!` stands for any run of `!`, `?` for any run of `?`, and `...` for any run of dots. `owo` is added under Friendly. The duplicates `!!!` and `??` are removed.
+
+### 15.3 Flags
+
+A third kind of label, independent of intent and tone: a yes/no attribute of a message. It exists so that something like adult content can be recorded without using up an intent or tone slot (the user's point: such a message still needs its ordinary labels to describe it).
+
+- Label file: an optional `"flags"` list, with the same entry shape and id rules as intents and tones (ids unique within flags, `Unknown` reserved). `aliases` may have a `"flags"` map. `LabelSet.Flags` and `ResolveFlag`. Flags are part of the fingerprint. A file with no `flags` is valid and means no flags.
+- Starting file: one flag, `Adult`, definition "Sexually explicit content.", no example.
+- Prompt: after the tones, a `Flags` list with the definitions and the sentence "Give every flag that applies to the message; most messages have none." When the label set has no flags, the prompt and the schema leave flags out entirely.
+- Schema: `"flags"` is a required array of the flag ids with `maxItems` equal to the number of flags and no minimum.
+- `MessageAnalysis` gains `IReadOnlyList<string> Flags` (canonical ids, no repeats; may be empty). `HasLabels` is unchanged: flags alone do not make a message "analysed". The parser resolves, drops unresolved and drops repeats.
+- `Profile.FlagCounts` (`Dictionary<string, long>`). `ApplyAnalysis` increments each flag once, only when `HasLabels`.
+- `ProfileView.Flags`: like tones (aliases merged, only current flags, count descending, ties in file order, percent of `AnalyzedCount`).
+- Storage: `flagCounts` on the profile (string keys, NUL guard) and `flags` on a logged message. A missing field reads as empty. No migration.
+
+### 15.4 Tests
+
+- `LabelSetTests`: `Parse_FlagsAreOptional_AndValidatedLikeLabels`, `Parse_RejectsPatternsWithTheSameNormalForm`, `MatchReaction_UsesNormalForm` (theory: `:)))`, `xDDD`, `LOOOOL`, `ughhh`, `!!!!`, `???`), `MatchReaction_SymbolOnlyTextNotInTable_ReturnsEmptyList` (theory: `>.>`, `~`, `<.<`), `MatchReaction_TextWithLettersNotInTable_ReturnsNull`, `ResolveFlag_IsCaseInsensitive_AndAppliesAliases`, `Fingerprint_ChangesWhenFlagsChange`. Update `Default_LoadsAndContainsEveryStartingLabelAndReaction` for the new table and the `Adult` flag.
+- `AnalysisResponseParserTests`: `PlainLists_KeepFirstNResolved_InModelOrder`, `PlainLists_DropUnresolvedAndRepeats`, `ObjectForm_StillUsesConfidenceRules`, `ReactionIntentFromModel_IsDropped`, `ReactionOnlyResult_KeepsItsLanguage` (replaces `ReactionOnlyIntent_SetsLanguageToUnd`), `Flags_ResolvedDeduplicated_UnresolvedDropped`, `FlagsMissing_GivesEmptyList`.
+- `OllamaClientTests`: `Analyze_PlainListSchema_HasMinAndMaxItems`, `Analyze_ConfidenceOption_SwitchesSchemaAndPrompt`, `Analyze_ReactionIntent_IsNotOfferedToTheModel`, `Analyze_FlagsInPromptAndSchema_WhenLabelSetHasFlags`, `Analyze_NoFlagsInPromptOrSchema_WhenLabelSetHasNone`.
+- `ProfileUpdaterTests`: `ApplyAnalysis_CountsEachFlagOnce`, `ApplyAnalysis_FlagsWithoutLabels_AreNotCounted`.
+- `ProfilerEngineTests`: `Cycle_SymbolOnlyMessageNotInTable_IsAReactionWithNoTone_WithoutCallingTheAnalyzer`, `Cycle_ReactionVariants_MatchByNormalForm`.
+- `ProfileViewTests`: `Flags_ArePercentOfAnalysedMessages_AliasesMerged_RetiredOmitted`.
+- `ProfilerOptionsTests`: `IncludeLabelConfidence` defaults to false.
+- `LiteDbStorageTests`: `FlagCounts_RoundTrip`, `MessageLog_RoundTripsFlags`.
+
+No test may be weakened. Tests that asserted the 5b reply form as the default are rewritten for plain lists, and the confidence behaviour stays covered through the object form.
+
+### 15.0 Milestone 5b (already folded in)
 
 Folded into the sections above; this is only a pointer. Decision D24 in `DECISIONS.md` has the reasons.
 
