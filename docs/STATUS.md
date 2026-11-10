@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestones 1 to 3 reviewed and pushed). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 4 implemented, awaiting review). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -9,7 +9,7 @@ Last updated: 2026-11-09 (milestones 1 to 3 reviewed and pushed). Update this fi
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed, pushed | Commits `23b811b` and `61e90cd` (review fixes). |
 | 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
-| 4. LiteDB storage | Not started | |
+| 4. LiteDB storage | Done, awaiting review, not pushed | `LiteDbStorage`, `LiteDbProfileStore`, `LiteDbMessageLog` on LiteDB 5.0.21. 188 tests pass (21 new). Decisions in D20. |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | Not started | CI should be pulled forward; see below. |
@@ -18,9 +18,9 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Start milestone 4 (LiteDB storage) with the implementation prompt in `docs/WORKFLOW.md`.
+1. Review milestone 4 with the review prompt in `docs/WORKFLOW.md`.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
-3. Continue with milestone 5. None of them needs the game.
+3. Start milestone 5. None of them needs the game.
 
 ## Ollama smoke test results
 
@@ -53,11 +53,16 @@ Minor points that were noted and deliberately left:
 - A non-2xx reply from `/api/chat` reports only the status code. Including Ollama's `error` text (for example "model not found") would make the status line more useful.
 - If the summariser returns an empty reply, the engine still clears that character's buffered messages although no summary was written.
 - `Normalize_ClampsOutOfRangeValues` checks several older values (queue depth, per-cycle limits, message length, retention, timeout) with inequalities instead of the exact bound. The three new options are checked exactly. Tighten the rest when convenient.
-- `FirstSeenUtc` and `LastSeenUtc` keep the offset the message carried. They compare correctly. The storage layer must normalise to UTC in milestone 4, as the spec says.
-- `CharacterKey` has a public constructor that skips the trimming done by `CharacterKey.Create`. Storage will need the constructor; always use `Create` in application code.
+- `FirstSeenUtc` and `LastSeenUtc` keep the offset the message carried in memory. They compare correctly. Storage normalises them to UTC (done in milestone 4), so values read back always have offset zero.
+- `CharacterKey` has a public constructor that skips the trimming done by `CharacterKey.Create`. Storage uses it to rebuild keys from values it wrote itself; always use `Create` in application code.
 - After a restart the in-memory summary buffer is empty but `MessagesSinceSummary` is saved, so the first summary can be written from one new message plus the old summary. Consider a minimum buffered-message count.
 - For milestone 6: `MessageIntake.Accept` calls the options function on every chat message, so the plugin must return a cached normalised snapshot, not rebuild it per call. A profile created only by `SetNotesAsync` has `MessageCount` 0 and a default `FirstSeenUtc`; the UI must show that as "not seen yet". Dalamud's `Dispose` is synchronous and will block up to 2 seconds on the engine.
 - `Directory.Build.props` turns on warnings-as-errors for every project. The spec only requires it for the non-Dalamud projects, so the plugin project may opt out if Dalamud's own warnings get in the way.
+
+- Milestone 4: `LiteDbMessageLog.GetRecent` loads every logged message for the character and sorts in memory. Bounded by the retention window, fine for v1; revisit if a busy character accumulates tens of thousands of rows.
+- Milestone 4: `LiteDbProfileStore.List` with a name filter scans all profiles in `LastSeenUtc` order and filters in code. Fine for thousands of profiles.
+- Milestone 4: a profile written by a newer schema version makes `Get` and `List` throw `NotSupportedException`. The plugin (milestone 6) must catch that and show a message rather than crash.
+- Milestone 4: the `profiles` and `messages` collections are not wrapped in a shared transaction, so a delete of a profile and its messages is two separate writes (as `ProfileService` already does).
 
 ## Environment notes
 

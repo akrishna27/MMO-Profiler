@@ -155,3 +155,16 @@ The user then chose to skip the official repository.
 **Sizing.** Worst case for classification is about 4000 prompt tokens of chat text plus about 400 for the instructions and schema and about 800 for the reply, which fits in 8192. Typical chat (around 60 characters a message) is unaffected by the character budget.
 
 **Revisit if** the model evaluation picks a model with a smaller trained context, or if 8192 costs too much VRAM alongside the game.
+
+## D20. LiteDB storage choices where the spec was silent (2026-11-09)
+
+**Decision.**
+- Package: `LiteDB` 5.0.21, the latest 5.x, as allowed by spec section 3.
+- Documents are built by hand as `BsonDocument` instead of using LiteDB's object mapper, so enum keys are always written as names, unknown names are dropped on read, and nothing depends on mapper conventions.
+- `DateTimeOffset` is stored as the UTC tick count (`long`). LiteDB's own `DateTime` handling converts to local time on read; ticks avoid that and sort correctly in the index.
+- A profile document carries `gameId`, `name`, `realm` and `nameLower` next to the `_id`. `List(nameContains)` filters in code with a plain substring test, so `%` and `_` typed into the search box are literal.
+- A document whose `schemaVersion` is higher than 1 is refused with `NotSupportedException` instead of being read as version 1. `Migrate` is a private method in `LiteDbProfileStore`; missing version means 1.
+- `LiteDbStorage` owns the database and exposes `Profiles` and `Messages`; disposing it closes the file. `OpenInMemory()` uses a `MemoryStream`.
+- `GetRecent` orders by timestamp, then by insertion id, newest first.
+
+**Why.** The spec fixed the collections and indexes but not the encoding. Each choice is the smallest one that makes the listed storage behaviours hold, and the version refusal protects a user who downgrades the plugin from silently corrupting data.

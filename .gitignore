@@ -25,6 +25,8 @@ packages/
 *.db
 *.db-log
 *.litedb
+# The storage project folder matches *.litedb when matching ignores case
+!/src/MmoProfiler.Storage.LiteDb/
 
 # OS
 Thumbs.db

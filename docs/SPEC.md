@@ -423,8 +423,8 @@ User content: the previous summary (or "none") followed by the recent messages a
 - Collections: `profiles` (id = `Profile.Id`, index on `LastSeenUtc` and on a lower-cased name field) and `messages` (auto id, indexes on sender id and timestamp).
 - `List(nameContains, ...)` matches case-insensitively against the character name.
 - Store dictionaries with enum keys as string keys so renumbering an enum never corrupts data. Unknown keys on read are dropped, not thrown.
-- Store `DateTimeOffset` values as UTC.
-- On open, read `SchemaVersion`. Version 1 is the only version; leave a single `Migrate` method as the seam for later versions.
+- Store `DateTimeOffset` values as UTC (as tick counts; values read back have offset zero).
+- On read, check each document's `SchemaVersion`. Version 1 is the only version; leave a single `Migrate` method as the seam for later versions. A document with a higher version is refused with `NotSupportedException` (decision D20).
 - The database file lives in the plugin configuration directory supplied by the host.
 
 ## 9. FFXIV layers
