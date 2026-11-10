@@ -162,9 +162,24 @@ public sealed class ProfilerEngine : IAsyncDisposable
         else
         {
             var chunkSize = Math.Max(1, o.ClassificationChunkSize);
-            for (var start = 0; start < batch.Count; start += chunkSize)
+            var maxChars = Math.Max(1, o.ClassificationChunkMaxChars);
+            var next = 0;
+            while (next < batch.Count)
             {
-                var chunk = batch.GetRange(start, Math.Min(chunkSize, batch.Count - start));
+                // A chunk closes at chunkSize messages or when the next message would push its
+                // text over maxChars; a message over the budget on its own gets a chunk to itself.
+                var start = next;
+                var chars = 0;
+                var end = start;
+                while (end < batch.Count && end - start < chunkSize)
+                {
+                    var len = batch[end].Text.Length;
+                    if (end > start && chars + len > maxChars) break;
+                    chars += len;
+                    end++;
+                }
+                next = end;
+                var chunk = batch.GetRange(start, end - start);
                 IReadOnlyList<MessageAnalysis> results;
                 try
                 {

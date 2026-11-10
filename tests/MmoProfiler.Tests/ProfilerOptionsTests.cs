@@ -40,6 +40,9 @@ public class ProfilerOptionsTests
             MaxMessageLength = 0,
             RawMessageRetentionDays = 0,
             OllamaTimeout = TimeSpan.Zero,
+            OllamaContextTokens = 0,
+            ClassificationChunkMaxChars = 0,
+            SummaryMaxInputChars = 0,
         }.Normalize();
 
         Assert.Equal(100, low.QueueCapacity);
@@ -52,6 +55,9 @@ public class ProfilerOptionsTests
         Assert.True(low.MaxMessageLength >= 1);
         Assert.Equal(1, low.RawMessageRetentionDays);
         Assert.True(low.OllamaTimeout > TimeSpan.Zero);
+        Assert.Equal(2048, low.OllamaContextTokens);
+        Assert.Equal(500, low.ClassificationChunkMaxChars);
+        Assert.Equal(500, low.SummaryMaxInputChars);
 
         var high = new ProfilerOptions
         {
@@ -65,6 +71,9 @@ public class ProfilerOptionsTests
             MaxMessageLength = int.MaxValue,
             RawMessageRetentionDays = int.MaxValue,
             OllamaTimeout = TimeSpan.FromDays(1),
+            OllamaContextTokens = int.MaxValue,
+            ClassificationChunkMaxChars = int.MaxValue,
+            SummaryMaxInputChars = int.MaxValue,
         }.Normalize();
 
         Assert.Equal(20000, high.QueueCapacity);
@@ -75,6 +84,9 @@ public class ProfilerOptionsTests
         Assert.True(high.MaxMessageLength < int.MaxValue);
         Assert.True(high.RawMessageRetentionDays < int.MaxValue);
         Assert.True(high.OllamaTimeout <= TimeSpan.FromMinutes(10));
+        Assert.Equal(32768, high.OllamaContextTokens);
+        Assert.Equal(20000, high.ClassificationChunkMaxChars);
+        Assert.Equal(20000, high.SummaryMaxInputChars);
     }
 
     [Fact]

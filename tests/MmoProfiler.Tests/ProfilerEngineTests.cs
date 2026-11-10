@@ -114,6 +114,39 @@ public class ProfilerEngineTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Cycle_ClosesChunkEarly_WhenCharBudgetReached()
+    {
+        _options = _options with { ClassificationChunkSize = 20, ClassificationChunkMaxChars = 500 };
+        for (var i = 0; i < 6; i++) Assert.True(_intake.Accept(M(Alice, new string((char)('a' + i), 200))));
+
+        await Cycle();
+
+        // 200 + 200 fits (400); a third would make 600 > 500.
+        Assert.Equal(new[] { 2, 2, 2 }, _analyzer.Calls.Select(c => c.Count));
+        Assert.Equal(6, _service.Get(Alice)!.AnalyzedCount);
+        Assert.Equal(new string('a', 200), _analyzer.Calls[0][0].Text);
+        Assert.Equal(new string('c', 200), _analyzer.Calls[1][0].Text);
+        Assert.Equal(new string('e', 200), _analyzer.Calls[2][0].Text);
+    }
+
+    [Fact]
+    public async Task Cycle_OversizedMessage_GetsItsOwnChunk()
+    {
+        _options = _options with { ClassificationChunkSize = 20, ClassificationChunkMaxChars = 500 };
+        _options = _options with { MaxMessageLength = 2000 };
+        _intake.Accept(M(Alice, "small one"));
+        _intake.Accept(M(Alice, new string('x', 900)));
+        _intake.Accept(M(Alice, "small two"));
+        _intake.Accept(M(Alice, "small three"));
+
+        await Cycle();
+
+        Assert.Equal(new[] { 1, 1, 2 }, _analyzer.Calls.Select(c => c.Count));
+        Assert.Equal(900, _analyzer.Calls[1][0].Text.Length);
+        Assert.Equal(4, _service.Get(Alice)!.AnalyzedCount);
+    }
+
+    [Fact]
     public async Task Cycle_AppliesAnalysisToCorrectSender()
     {
         _analyzer.Handler = (_, chunk) => chunk

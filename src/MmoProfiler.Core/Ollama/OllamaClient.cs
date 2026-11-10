@@ -126,8 +126,22 @@ public sealed class OllamaClient : IMessageAnalyzer, IProfileSummarizer
           .AppendLine(string.IsNullOrWhiteSpace(request.PreviousSummary) ? "none" : Flatten(request.PreviousSummary))
           .AppendLine()
           .AppendLine("Recent messages:");
-        foreach (var m in request.RecentMessages)
+        // Keep the newest messages that fit the character budget (always at least one), in original order.
+        var budget = _options().SummaryMaxInputChars;
+        var first = request.RecentMessages.Count;
+        var used = 0;
+        while (first > 0)
+        {
+            var len = request.RecentMessages[first - 1].Text.Length;
+            if (first < request.RecentMessages.Count && used + len > budget) break;
+            used += len;
+            first--;
+        }
+        for (var i = first; i < request.RecentMessages.Count; i++)
+        {
+            var m = request.RecentMessages[i];
             sb.Append('[').Append(m.Channel).Append("] ").AppendLine(Flatten(m.Text));
+        }
 
         var body = ChatRequest(SummarySystemPrompt, sb.ToString(), format: null);
         var content = await ChatAsync(body, ct).ConfigureAwait(false);
@@ -204,7 +218,7 @@ public sealed class OllamaClient : IMessageAnalyzer, IProfileSummarizer
             ["model"] = _options().OllamaModel,
             ["stream"] = false,
             ["keep_alive"] = "10m",
-            ["options"] = new JsonObject { ["temperature"] = 0 },
+            ["options"] = new JsonObject { ["temperature"] = 0, ["num_ctx"] = _options().OllamaContextTokens },
             ["messages"] = new JsonArray(
                 new JsonObject { ["role"] = "system", ["content"] = systemPrompt },
                 new JsonObject { ["role"] = "user", ["content"] = userContent }),

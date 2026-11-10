@@ -29,6 +29,9 @@ public sealed record ProfilerOptions
     public string OllamaEndpoint { get; init; } = DefaultEndpoint;
     public string OllamaModel { get; init; } = DefaultModel;
     public TimeSpan OllamaTimeout { get; init; } = TimeSpan.FromSeconds(60);
+    public int OllamaContextTokens { get; init; } = 8192;
+    public int ClassificationChunkMaxChars { get; init; } = 4000;
+    public int SummaryMaxInputChars { get; init; } = 6000;
 
     /// <summary>Returns a copy with every value clamped to a sane range.</summary>
     public ProfilerOptions Normalize()
@@ -52,6 +55,9 @@ public sealed record ProfilerOptions
             OllamaEndpoint = IsValidEndpoint(endpoint) ? endpoint! : DefaultEndpoint,
             OllamaModel = string.IsNullOrEmpty(model) ? DefaultModel : model,
             OllamaTimeout = Clamp(OllamaTimeout, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(10)),
+            OllamaContextTokens = Math.Clamp(OllamaContextTokens, 2048, 32768),
+            ClassificationChunkMaxChars = Math.Clamp(ClassificationChunkMaxChars, 500, 20000),
+            SummaryMaxInputChars = Math.Clamp(SummaryMaxInputChars, 500, 20000),
         };
     }
 

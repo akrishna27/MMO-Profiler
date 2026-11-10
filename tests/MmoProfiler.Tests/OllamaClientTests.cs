@@ -269,6 +269,61 @@ public class OllamaClientTests : IDisposable
     }
 
     [Fact]
+    public async Task Analyze_SendsConfiguredNumCtx()
+    {
+        _options = _options with { OllamaContextTokens = 4096 };
+        ReplyWith(OkResults(1));
+
+        await _client.AnalyzeAsync(Messages((Alice, ChatChannel.Say, "hello")), CancellationToken.None);
+
+        using var doc = Body(Assert.Single(_handler.Requests));
+        var opts = doc.RootElement.GetProperty("options");
+        Assert.Equal(4096, opts.GetProperty("num_ctx").GetInt32());
+        Assert.Equal(0, opts.GetProperty("temperature").GetInt32());
+    }
+
+    [Fact]
+    public async Task Summarize_SendsConfiguredNumCtx()
+    {
+        _options = _options with { OllamaContextTokens = 16384 };
+        ReplyWith("ok");
+
+        await _client.SummarizeAsync(
+            new SummaryRequest(Alice, null, Messages((Alice, ChatChannel.Say, "hi")).ToList()), CancellationToken.None);
+
+        using var doc = Body(Assert.Single(_handler.Requests));
+        Assert.Equal(16384, doc.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32());
+    }
+
+    [Fact]
+    public async Task Summarize_KeepsOnlyNewestMessagesWithinCharBudget()
+    {
+        _options = _options with { SummaryMaxInputChars = 500 };
+        ReplyWith("ok");
+        var texts = new[] { new string('a', 200), new string('b', 200), new string('c', 200), new string('d', 200) };
+        var request = new SummaryRequest(Alice, null,
+            texts.Select(t => Msg(Alice, t, ChatChannel.Say)).ToList());
+
+        await _client.SummarizeAsync(request, CancellationToken.None);
+
+        using var doc = Body(Assert.Single(_handler.Requests));
+        var user = doc.RootElement.GetProperty("messages")[1].GetProperty("content").GetString()!;
+        Assert.DoesNotContain(texts[0], user);
+        Assert.DoesNotContain(texts[1], user);
+        Assert.Contains(texts[2], user);
+        Assert.Contains(texts[3], user);
+        Assert.True(user.IndexOf(texts[2], StringComparison.Ordinal) < user.IndexOf(texts[3], StringComparison.Ordinal));
+
+        // A single message over the budget is still sent.
+        _handler.Requests.Clear();
+        var huge = new string('z', 900);
+        await _client.SummarizeAsync(
+            new SummaryRequest(Alice, null, new[] { Msg(Alice, huge, ChatChannel.Say) }.ToList()), CancellationToken.None);
+        using var doc2 = Body(Assert.Single(_handler.Requests));
+        Assert.Contains(huge, doc2.RootElement.GetProperty("messages")[1].GetProperty("content").GetString()!);
+    }
+
+    [Fact]
     public async Task Summarize_NoPreviousSummary_SaysNone()
     {
         ReplyWith("ok");
