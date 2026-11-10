@@ -186,3 +186,9 @@ Readings where the spec was silent:
 - `ProfileView` carries identity and counts but not channel or language breakdowns, which the spec's list for 9.3 did not include.
 
 **Why.** Each is the smallest reading that makes the listed tests meaningful. The code check was requested because the table was written from memory.
+
+## D23. The 20-character name limit does not count the space (2026-11-09)
+
+**Decision.** `FfxivNames.CleanSenderName` accepts a name when forename plus surname total at most 20 characters, not counting the space between them.
+
+**Why.** Found in the milestone 5 review. The original spec said "20 characters maximum in total" and the implementation counted the space, so a name of 10 + 10 letters was rejected and that player would never be profiled. The game's rule, as quoted from the Console Games Wiki character creation page on 2026-11-09, is "Forenames and surnames are restricted to 15 characters or less, with a combined limit of 20 characters." That page does not say whether the space counts; the belief that it does not is from memory and unverified. The choice is deliberately the lenient one: this check exists to reject garbage, so accepting one character too many costs nothing, while rejecting a valid name silently drops a real player.

@@ -459,7 +459,7 @@ User content: the previous summary (or "none") followed by the recent messages a
 `FfxivNames.CleanSenderName(string? raw)`:
 
 - Removes leading characters that are not letters (party-number glyphs, friend and cross-world icons, which live in the Unicode private use area), trims, and collapses whitespace.
-- Returns null if the result is not a plausible character name: two words, each 2 to 15 characters, letters plus `'` and `-` only, 20 characters maximum in total. "Letters" means `char.IsLetter`; null or empty input returns null. Only leading characters are stripped, so a trailing glyph makes the name implausible (returns null).
+- Returns null if the result is not a plausible character name: two words, each 2 to 15 characters, letters plus `'` and `-` only, and at most 20 characters combined, not counting the space between them (decision D23). "Letters" means `char.IsLetter`; null or empty input returns null. Only leading characters are stripped, so a trailing glyph makes the name implausible (returns null).
 
 `FfxivKeys.Create(string name, string homeWorld)` returns `CharacterKey.Create("ffxiv", name, homeWorld)`.
 
@@ -471,6 +471,7 @@ Services expected (names as of earlier API levels): `IDalamudPluginInterface`, `
 
 **Chat hook.** Subscribe to the chat message event on `IChatGui`. In the handler:
 
+0. The event signature in current Dalamud is `event OnHandleableChatMessageDelegate ChatMessage` with `delegate void OnHandleableChatMessageDelegate(IHandleableChatMessage message)` (read from `IChatGui.cs` on Dalamud `master`, 2026-11-09). The older five-parameter form no longer exists. Read the chat type, sender, text and timestamp from that message object; check its definition before coding.
 1. Call `FfxivChat.TryMapChannel((int)type, ...)`. Return if false.
 2. Find the `PlayerPayload` in the sender `SeString` and take its player name and home world name. If there is none, return. (The local player's own messages typically have no player payload; do not guess a world.)
 3. Clean the name with `FfxivNames.CleanSenderName`. Return if null.

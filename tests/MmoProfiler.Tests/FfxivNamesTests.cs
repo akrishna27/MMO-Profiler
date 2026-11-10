@@ -44,7 +44,7 @@ public class FfxivNamesTests
     [InlineData("Alice Ex@mple")]                 // other symbol
     [InlineData("A Example")]                     // word under 2 characters
     [InlineData("Alicealicealicealice Bob")]      // word over 15 characters and total over 20
-    [InlineData("Abcdefghijkl Mnopqrstuvw")]      // each word fine, total 24 over 20
+    [InlineData("Abcdefghijkl Mnopqrstuvw")]      // each word fine, 23 combined is over 20
     [InlineData("Alice Example")]           // trailing glyph is not stripped
     [InlineData("")]                  // nothing left
     [InlineData("")]
@@ -58,9 +58,11 @@ public class FfxivNamesTests
     [Fact]
     public void CleanSenderName_TotalLengthBoundary()
     {
-        // 20 characters is allowed, 21 is not.
-        Assert.Equal("Abcdefghij Klmnopqrs", FfxivNames.CleanSenderName("Abcdefghij Klmnopqrs"));
-        Assert.Null(FfxivNames.CleanSenderName("Abcdefghij Klmnopqrst"));
+        // The combined limit is 20 characters and does not count the space between the two names.
+        Assert.Equal("Abcdefghij Klmnopqrs", FfxivNames.CleanSenderName("Abcdefghij Klmnopqrs"));   // 10 + 9
+        Assert.Equal("Abcdefghij Klmnopqrst", FfxivNames.CleanSenderName("Abcdefghij Klmnopqrst")); // 10 + 10
+        Assert.Equal("Abcdefghijklmno Pqrst", FfxivNames.CleanSenderName("Abcdefghijklmno Pqrst")); // 15 + 5
+        Assert.Null(FfxivNames.CleanSenderName("Abcdefghij Klmnopqrstu"));                           // 10 + 11
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestones 1 to 4 reviewed and pushed; milestone 5 done, awaiting review). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestones 1 to 5 reviewed). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-09 (milestones 1 to 4 reviewed and pushed; milestone 5 don
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed, pushed | Commits `23b811b` and `61e90cd` (review fixes). |
 | 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
 | 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
-| 5. FFXIV mapping and `ProfileView` | Done, awaiting review | `MmoProfiler.Games.Ffxiv` (no Dalamud reference) and `ProfileView` in Core. Chat codes checked against Dalamud `master`: no change to the table (D22). 277 tests pass (87 new). |
+| 5. FFXIV mapping and `ProfileView` | Done, reviewed | Commit `16d5571` plus the name-length fix (D23). Chat codes independently re-checked against Dalamud `master` in review: all match (D22). 277 tests pass on 10 consecutive runs. |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | Not started | CI should be pulled forward; see below. |
 
@@ -18,7 +18,7 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Review milestone 5 (see `docs/WORKFLOW.md`). Do not start milestone 6 before that.
+1. Milestones 1 to 5 are complete and none of them needed the game. Milestone 6 is blocked on the items under "Before milestone 6"; do those next.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 
 ## Ollama smoke test results
@@ -36,7 +36,7 @@ Run 2026-11-09 through the real `OllamaClient` against Ollama 0.40.15, `llama3.2
 ## Before milestone 6
 
 - **Model evaluation.** Build a small labelled set of game-chat messages, score two or three small Ollama models on tone and intent, and tune the prompts in spec section 7. Then confirm or change the default model (decision D14).
-- **Dalamud API check.** Spec section 9 was written from memory of older API levels. Verify the chat event signature, the chat type codes, the context menu API, the local-player service and the SDK version against API level 15.
+- **Dalamud API check (partly done).** Confirmed on 2026-11-09 from Dalamud `master`: the chat type codes are correct (D22), and the chat event is now `ChatMessage` taking a single `IHandleableChatMessage` (spec section 9.2 step 0), not the five-parameter form the spec first assumed. Still to check: the members of `IHandleableChatMessage`, and whether the chat type it carries still has flag bits above the low seven (the `XivChatType` file mentions none; the 0x7F mask is harmless either way). Spec section 9 was written from memory of older API levels. Verify the chat event signature, the chat type codes, the context menu API, the local-player service and the SDK version against API level 15.
 - **UI.** The windows in spec section 9.2 are a first proposal the user has not reviewed in detail (decision D15).
 
 ## Carried over from reviews
@@ -47,6 +47,8 @@ Minor points that were noted and deliberately left:
 - Messages still waiting in the intake queue when a profile is deleted are processed by the next cycle and recreate it, as if the character had just spoken. Accepted for now; Delete All could also empty the queue.
 - If `DisposeAsync` gives up on a stuck cycle after 2 seconds, that cycle can still finish later and write to the store. In milestone 6 the plugin must tolerate a store call after the database is closed.
 - `Dispose_InFlightCycleIgnoringCancellation_ReturnsAfterTwoSeconds` asserts the wait is under 3 fake seconds while stepping fake time against real scheduling. It has not failed, but if it ever flakes on a loaded machine, widen that upper bound.
+- For milestone 6: take the sender's name and home world from the `PlayerPayload`, never from the sender's plain text. `CleanSenderName` strips only leading glyphs, and for a cross-world player the plain text is expected to run the name and world together.
+- For milestone 6: `ProfileView` has no channel or language breakdown yet, though the profile window in spec section 9.2 shows both. Add them to the view (with tests) when building the window.
 - For milestone 6: `HttpClient.Timeout` defaults to 100 seconds, which silently caps any larger `OllamaTimeout`. The plugin should create the client with `Timeout = Timeout.InfiniteTimeSpan` and let `OllamaClient` enforce the timeout.
 - `CheckHealthAsync` uses the full `OllamaTimeout` (60 seconds by default), so Test Connection against an unreachable remote host can take that long. A short fixed timeout for the health check would be friendlier.
 - A non-2xx reply from `/api/chat` reports only the status code. Including Ollama's `error` text (for example "model not found") would make the status line more useful.
