@@ -178,7 +178,7 @@ public sealed class Profile
 
 - If both tone and intent are `Unknown`, does nothing.
 - Otherwise increments `AnalyzedCount`, `ToneCounts`, `IntentCounts` and `LanguageCounts`.
-- Topics: trim, lower-case, drop empties and anything over 40 characters, take at most 3 per message, de-duplicate within the message, increment `TopicCounts`.
+- Topics: replace every run of control characters and whitespace with a single space (a NUL character in a topic would otherwise make the storage layer reject the whole batch, see decision D21), then trim, lower-case, drop empties and anything over 40 characters, take at most 3 per message, de-duplicate within the message, increment `TopicCounts`.
 - If `TopicCounts` exceeds 200 entries, remove entries with the lowest count until 200 remain. Break ties by removing the alphabetically last key first. The cap is far above the ten topics the UI shows so that new topics can still enter a long-lived profile.
 
 `ApplySummary(Profile p, string summary, DateTimeOffset now)`:
@@ -423,6 +423,7 @@ User content: the previous summary (or "none") followed by the recent messages a
 - Collections: `profiles` (id = `Profile.Id`, index on `LastSeenUtc` and on a lower-cased name field) and `messages` (auto id, indexes on sender id and timestamp).
 - `List(nameContains, ...)` matches case-insensitively against the character name.
 - Store dictionaries with enum keys as string keys so renumbering an enum never corrupts data. Unknown keys on read are dropped, not thrown.
+- LiteDB rejects a document whose field name contains a NUL character, and one rejected document fails the whole `UpsertMany`. When writing `LanguageCounts` and `TopicCounts`, skip any key that contains a NUL character so one bad key can never lose a batch.
 - Store `DateTimeOffset` values as UTC (as tick counts; values read back have offset zero).
 - On read, check each document's `SchemaVersion`. Version 1 is the only version; leave a single `Migrate` method as the seam for later versions. A document with a higher version is refused with `NotSupportedException` (decision D20).
 - The database file lives in the plugin configuration directory supplied by the host.
@@ -535,6 +536,7 @@ xUnit. Use `FakeTimeProvider` for time. Use hand-written fakes: `FakeAnalyzer` (
 - `ApplyAnalysis_Unknown_DoesNothing`
 - `ApplyAnalysis_IncrementsToneIntentLanguage`
 - `ApplyAnalysis_NormalisesAndCapsTopicsPerMessage`
+- `ApplyAnalysis_ReplacesControlCharactersInTopics`
 - `ApplyAnalysis_EvictsLowestTopics_WhenOverCap`
 - `ApplySummary_TruncatesStripsControlChars_AndResetsCounter`
 - `ApplySummary_ReplacesLineBreaksAndControlCharsWithSingleSpace`
@@ -639,6 +641,7 @@ The in-flight tests below need fakes that block until the test releases them (fo
 - `List_FiltersByNameSubstring_CaseInsensitive`
 - `Delete_RemovesProfile` and `DeleteAll_EmptiesStore`
 - `EnumDictionaries_StoredAsStrings_UnknownKeysIgnoredOnRead`
+- `UpsertMany_KeyContainingNul_IsSkipped_AndOtherProfilesAreSaved`
 - `MessageLog_GetRecent_NewestFirst_LimitedToTake`
 - `MessageLog_DeleteOlderThan_RemovesOnlyOldMessages`
 - `MessageLog_DeleteFor_RemovesOnlyThatCharacter`

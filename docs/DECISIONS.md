@@ -168,3 +168,9 @@ The user then chose to skip the official repository.
 - `GetRecent` orders by timestamp, then by insertion id, newest first.
 
 **Why.** The spec fixed the collections and indexes but not the encoding. Each choice is the smallest one that makes the listed storage behaviours hold, and the version refusal protects a user who downgrades the plugin from silently corrupting data.
+
+## D21. Topic text is cleaned before it becomes a storage key (2026-11-09)
+
+**Decision.** `ProfileUpdater.ApplyAnalysis` replaces control characters and whitespace runs in topics with a single space. As a second line of defence, the LiteDB store skips any `LanguageCounts` or `TopicCounts` key containing a NUL character when writing.
+
+**Why.** Found in the milestone 4 review by probing the real store. Topics come from the model, and so indirectly from what other players type. They are used as LiteDB field names. LiteDB throws `LiteException` ("Invalid null character") for a field name containing NUL, and because the engine saves a cycle with one `UpsertMany`, a single such topic made the store save none of that cycle's profiles. Other awkward keys (spaces, `$`, `.`, quotes, `_id`, Japanese, tabs, line breaks) round-trip correctly, and NUL inside values (notes, summary, message text) is fine. The gap was in the original spec, which did not clean topics, combined with D20's choice to use topics as field names; neither is wrong on its own.
