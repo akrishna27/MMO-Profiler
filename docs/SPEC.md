@@ -453,12 +453,13 @@ User content: the previous summary (or "none") followed by the recent messages a
 | 101 to 107 | CrossLinkShell2 to 8 | `CrossWorldLinkshell` | `CWLS2` to `CWLS8` |
 
 - Everything else returns false. That includes 12 (TellOutgoing), 28 (CustomEmote), 29 (StandardEmote), and all system, combat and NPC types.
-- Confirm these codes against the current `XivChatType` enum and correct the table if any differ.
+- Checked on 2026-11-09 against `Dalamud/Game/Text/XivChatType.cs` on the `master` branch of goatcorp/Dalamud: every code and name in the table matches, and no row needed correcting (decision D22). A raw value of 0x7F or below that is not in the table, such as 25, 26, 31 or 100, returns false.
+- The channel names in the table's second column are Dalamud's enum names. The project uses only the numeric codes and does not reference Dalamud.
 
-`FfxivNames.CleanSenderName(string raw)`:
+`FfxivNames.CleanSenderName(string? raw)`:
 
 - Removes leading characters that are not letters (party-number glyphs, friend and cross-world icons, which live in the Unicode private use area), trims, and collapses whitespace.
-- Returns null if the result is not a plausible character name: two words, each 2 to 15 characters, letters plus `'` and `-` only, 20 characters maximum in total.
+- Returns null if the result is not a plausible character name: two words, each 2 to 15 characters, letters plus `'` and `-` only, 20 characters maximum in total. "Letters" means `char.IsLetter`; null or empty input returns null. Only leading characters are stripped, so a trailing glyph makes the name implausible (returns null).
 
 `FfxivKeys.Create(string name, string homeWorld)` returns `CharacterKey.Create("ffxiv", name, homeWorld)`.
 
@@ -504,10 +505,11 @@ Windows must not query the store every frame. Load a view model when the window 
 
 `ProfileView.From(Profile p, TimeSpan localOffset)` produces:
 
-- Tone and intent lists as `(name, count, percent)` sorted by count descending, excluding `Unknown`, with percentages of `AnalyzedCount` rounded to one decimal place.
-- Top 10 topics by count.
-- A `[7, 24]` heat map shifted from UTC by the offset rounded to the nearest whole hour, wrapping across day boundaries.
-- `MostActive`: the three busiest hours of the week as text, for example `Sat 21:00`.
+- Tone and intent lists as `(name, count, percent)` sorted by count descending (ties by enum order), excluding `Unknown`, with percentages of `AnalyzedCount` rounded to one decimal place (0 when `AnalyzedCount` is 0).
+- Top 10 topics by count (ties alphabetical, ordinal).
+- A `[7, 24]` heat map, day 0 = Sunday, shifted from UTC by the offset rounded to the nearest whole hour (half away from zero), wrapping across day boundaries and across the end of the week.
+- `MostActive`: up to three busiest hours of the week as text in local time (the same shifted hours as the heat map), for example `Sat 21:00`. Ties go to the earlier hour of the week (Sunday first); hours with no activity are never listed.
+- The view also carries the identity and counts the profile window needs (`Key`, first and last seen, `MessageCount`, `AnalyzedCount`, `Summary`, `UserNotes`). Channel and language breakdowns are not in the view yet; add them in milestone 6 if the window needs them.
 
 ## 10. Porting to another game
 

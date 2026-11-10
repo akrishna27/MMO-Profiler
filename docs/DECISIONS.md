@@ -174,3 +174,15 @@ The user then chose to skip the official repository.
 **Decision.** `ProfileUpdater.ApplyAnalysis` replaces control characters and whitespace runs in topics with a single space. As a second line of defence, the LiteDB store skips any `LanguageCounts` or `TopicCounts` key containing a NUL character when writing.
 
 **Why.** Found in the milestone 4 review by probing the real store. Topics come from the model, and so indirectly from what other players type. They are used as LiteDB field names. LiteDB throws `LiteException` ("Invalid null character") for a field name containing NUL, and because the engine saves a cycle with one `UpsertMany`, a single such topic made the store save none of that cycle's profiles. Other awkward keys (spaces, `$`, `.`, quotes, `_id`, Japanese, tabs, line breaks) round-trip correctly, and NUL inside values (notes, summary, message text) is fine. The gap was in the original spec, which did not clean topics, combined with D20's choice to use topics as field names; neither is wrong on its own.
+
+## D22. FFXIV chat codes verified; small readings for milestone 5 (2026-11-09)
+
+**Decision.** The section 9.1 chat-type table needed no correction. Every code and Dalamud name was compared with `Dalamud/Game/Text/XivChatType.cs` on the `master` branch of goatcorp/Dalamud (fetched 2026-11-09): Say 10, Shout 11, TellOutgoing 12, TellIncoming 13, Party 14, Alliance 15, Ls1 to Ls8 16 to 23, FreeCompany 24, NoviceNetwork 27, CustomEmote 28, StandardEmote 29, Yell 30, CrossParty 32, PvPTeam 36, CrossLinkShell1 37, CrossLinkShell2 to 8 101 to 107. All match. This was checked against `master`, not against the API 15 tag specifically.
+
+Readings where the spec was silent:
+- `CleanSenderName` uses `char.IsLetter`, not ASCII only, and returns null for null input. FFXIV names are Latin only, so this is slightly more lenient than the game; the cost is nil and it avoids dropping a sender if the rules widen.
+- `ProfileView` ties: tone and intent by enum order, topics alphabetical (ordinal), busiest hours earliest in the week first. `MostActive` is in local time, matching the heat map. A half-hour offset rounds away from zero (+5:30 becomes +6, -3:30 becomes -4).
+- `ProfileView` returns `HeatMap` as `int[7, 24]` with day 0 = Sunday, and `MostActive` as a list of strings.
+- `ProfileView` carries identity and counts but not channel or language breakdowns, which the spec's list for 9.3 did not include.
+
+**Why.** Each is the smallest reading that makes the listed tests meaningful. The code check was requested because the table was written from memory.
