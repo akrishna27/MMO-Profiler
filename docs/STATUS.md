@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-10 (milestone 5b, the label redesign, implemented and awaiting review; milestones 1 to 5 reviewed and pushed; CI live). Update this file with every change to the codebase.
+Last updated: 2026-11-10 (milestone 5b reviewed: code is correct, but a real-model probe found the reply format too slow; a decision is pending). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -11,7 +11,7 @@ Last updated: 2026-11-10 (milestone 5b, the label redesign, implemented and awai
 | 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
 | 4. LiteDB storage | Done, reviewed, pushed | Commits `7720f68` and `8d092c8` (NUL fix, D21). LiteDB 5.0.21. 190 tests pass on 10 consecutive runs. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Done, reviewed | Commit `16d5571` plus the name-length fix (D23). Chat codes independently re-checked against Dalamud `master` in review: all match (D22). 277 tests pass on 10 consecutive runs. |
-| 5b. Label redesign | Implemented, awaiting review | Decisions D24 and D25. Labels are data (`Labels/default-labels.json` embedded in Core, optional `labels.json` override via `LabelSetLoader`); up to two intents and tones per message with confidence; emoticon-only messages labelled from a table with no model call. Spec section 15 is folded into 5.5, 6.6, 7.1, 8, 9.3 and 11. 360 tests pass (277 before), 6 consecutive runs. Must be reviewed before the model evaluation. |
+| 5b. Label redesign | Reviewed: implementation correct; design change pending (see "Milestone 5b review") | Decisions D24 and D25. Labels are data (`Labels/default-labels.json` embedded in Core, optional `labels.json` override via `LabelSetLoader`); up to two intents and tones per message with confidence; emoticon-only messages labelled from a table with no model call. Spec section 15 is folded into 5.5, 6.6, 7.1, 8, 9.3 and 11. 360 tests pass (277 before), 6 consecutive runs. Must be reviewed before the model evaluation. |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | CI done; README not started | `.github/workflows/ci.yml` runs `dotnet test tests/MmoProfiler.Tests` on `windows-latest` for every push to `main` and every pull request. |
 
@@ -19,9 +19,48 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Review milestone 5b; it touches most of Core. Read decision D25 first: it lists every place the spec was silent and what was chosen.
-2. Model evaluation, planned with the user in steps. Step 1 (label definitions) is done and is in section 15.6. Still to plan: the test set, the evaluation tool, the candidate models and the pass bar. The evaluation must also answer two questions from D24: is the model's confidence meaningful, and how much slower are two labels than one.
+1. Get the user's decision on the reply format (see "Milestone 5b review"), then specify the change and hand it to Sonnet.
+2. Model evaluation, planned with the user in steps. Step 1 (label definitions) is done (spec section 5.5.1). Step 2 (the test set) is planned; see "Evaluation test set". Still to plan: the evaluation tool, the candidate models and the pass bar. The evaluation must also answer two questions from D24: is the model's confidence meaningful, and how much slower are two labels than one.
 3. Milestone 6 stays blocked on the items under "Before milestone 6".
+
+## Milestone 5b review
+
+Reviewed 2026-11-10. Commit `0771c39`.
+
+**The implementation is correct.** It matches spec section 15 (now folded into sections 5 to 11). All 46 tests named for it exist, 360 tests pass on 10 consecutive runs, none skipped. No label id appears in C# outside the tests and both enums are gone. The four test names that disappeared are the enum tests, renamed as instructed. The readings in D25 are accepted. The spec fold kept the earlier content (D19, D23 and the Dalamud event note were checked).
+
+**The design does not perform as hoped.** Probe: the real prompt and schema built from the default label file, sent to Ollama 0.40.15 with `llama3.2:3b` on an RTX 4070, 20 invented messages in one chunk.
+
+| Variant | Time | Reply tokens |
+|---|---|---|
+| Before 5b (one tone, one intent, plain strings), from the earlier smoke test | 6.5 to 7.9 s | not recorded |
+| 5b as built, up to 2 intents and 2 tones | 13.5 s | 1692 |
+| 5b as built, single-label mode (1 and 1) | 12.8 s | 1605 |
+| 5b plus `minItems`/`maxItems` in the schema, 2 and 2 | 14.3 s | 1736 |
+
+1. **A chunk takes about twice as long.** The cost is the `{"label": ..., "confidence": ...}` object around every label, not the second label. Single-label mode therefore saves almost nothing, so it is not the performance lever D24 assumed.
+2. **Confidence carries no information.** Of 39 confidence values, 38 were 0.9 and one was 0.8. The 0.6 threshold never removed anything. This is the risk D24 named.
+3. **The model almost never gives a second label.** Average 1.0 intents and 1.0 tones per message when allowed two.
+4. **The `Reaction` intent is over-used by the model.** Eight messages in the second half of the chunk, including full sentences such as a complaint about a queue and a thank-you after a run, were labelled `Reaction`. The parser then set their language to `und`, as specified, which also discarded their language.
+5. **Schema limits do work.** With `minItems: 1` and `maxItems: N` the model returned at least one and at most N labels and no message came back unlabelled; without them one or two messages came back with empty lists. D25 had left this unchecked.
+6. Labels were worse in the second half of the chunk than the first, which suggests smaller chunks may be more accurate. For the evaluation to measure.
+
+Recommended change (not yet agreed with the user):
+
+- The model returns plain lists of label ids, strongest first, with no confidence: `"intents": ["LookingForGroup"]`. The schema sets `minItems: 1` and `maxItems` to the option value. The parser keeps the first N that resolve.
+- Confidence becomes an option that is off by default (`IncludeLabelConfidence`), so the evaluation can still try it on other models. The parser accepts both forms.
+- `Reaction` is not offered to the model. It is assigned only by code: from the emoticon table, or when a message contains no letters or digits at all.
+
+## Evaluation test set
+
+Planned with the user on 2026-11-09 and 2026-11-10. Not started; the user will do the labelling later.
+
+- **Source.** The user's real chat logs: about 945 text files in a folder outside the repo. They cover all channels, not only tells. The format is one line per message with a time, a channel tag, the speaker with the home world appended directly to the name, and the text; incoming and outgoing tells use `>>`. The date and the logging character are in the file name.
+- **Privacy.** The logs hold other players' names and private messages, and adult content is common in them. **All of this data stays on the user's machine.** Nothing from the logs, and no test set built from them, may be committed, quoted in docs or prompts, or pasted into a session. The test set lives outside the repo and the evaluation tool takes its path as an argument. Names are stripped. Models that read the messages must run locally unless the user explicitly decides otherwise for a specific step.
+- **Build.** A local script parses every file, drops game emotes and system lines, strips names, removes exact duplicates, and samples about 300 messages spread across channels and lengths, deliberately including emoticon-only messages and spam. 100 are held back as a final check and not used for tuning. The user's own outgoing messages are included as samples.
+- **Labelling.** Each message is labelled on its own, without conversation context, which is how the plugin sees it. The user labels the first 100 by hand; a larger model then drafts the rest for the user to correct. Which model is open, and it has to respect the privacy rule above.
+- **Public stand-in.** A small set of invented messages is committed so the tool has tests and runs without private data.
+- **Open.** Whether to add a label for adult content, which is very common in this game's chat. The nearest current labels are `Roleplay` and `Flirtatious`. A small model may also handle such content badly, which the evaluation should measure.
 
 ## Ollama smoke test results
 
