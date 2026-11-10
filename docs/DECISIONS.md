@@ -109,3 +109,19 @@ The user then chose to skip the official repository.
 **Decision.** Commands are `/mmoprofiler` and `/mmop`. Profiles open by command or by right-clicking a name ("View Profile"). The three windows (profile list, profile detail, settings) in spec section 9.2 are a starting point.
 
 **Why.** The user specified the two ways to open a profile but had not thought about the UI otherwise. Expect this to change before or during milestone 6.
+
+## D16. Milestone 2 choices where the spec was silent (2026-11-09)
+
+**Decision.**
+- `ProfileService` takes the `PendingSummaryBuffer` and optional `IMessageLog` and exposes them as `Pending` and `MessageLog`; the engine uses those, so the engine constructor matches the spec.
+- `PendingSummaryBuffer.Clear(key)` and `Remove(key)` both drop the character's entry; `ClearAll()` was added for `DeleteAllAsync`.
+- `ApplyBatchAsync` returns `Task`, as in the spec; the engine re-reads touched profiles with `Get` to decide who needs a summary.
+- `CircuitBreaker`: failures recorded while the breaker is already open are ignored, so one open period cannot double twice. `RecordSuccess` runs after each successful chunk or summary, not once per cycle.
+- `MessageIntake` reads `QueueCapacity` once at construction; changing it needs a new instance. All other options are read on every call.
+- `MessageIntake.Accept` does not call `Normalize()`; the host is expected to supply normalised options.
+- `ProfilerEngine`: `AnalyzerAvailable` starts true and goes false on the first analyser or summariser failure or while the breaker is open. `Analyzed` counts messages whose result was not fully `Unknown`. The hourly retention purge runs only while `StoreRawMessages` is on, and first runs on the first cycle that logs.
+- Analyser and summariser failures set `LastError` without ending the cycle; an exception from the batch save is a cycle failure that the loop catches.
+- `SetNotesAsync` creates the profile if it does not exist, so the UI can take notes on a character with no profile yet.
+
+**Why.** The spec left these open. Each is the smallest reading that satisfies the listed tests.
+

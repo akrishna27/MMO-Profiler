@@ -1,13 +1,13 @@
 # Status
 
-Last updated: 2026-11-09. Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 2 committed). Update this file with every change to the codebase.
 
 ## Where things stand
 
 | Milestone | State | Notes |
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
-| 2. Intake, circuit breaker, summary buffer, profile service, engine | In progress (Sonnet) | Uncommitted work was in the tree on 2026-11-09. Not reviewed. |
+| 2. Intake, circuit breaker, summary buffer, profile service, engine | Committed, not reviewed | Commit `23b811b` plus a docs follow-up. 98 tests pass. Not pushed. |
 | 3. Ollama client and response parser | Not started | |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
@@ -18,7 +18,7 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Review milestone 2 with the review prompt in `docs/WORKFLOW.md`. Look hardest at threading: overlapping cycles, the mutation lock in `ProfileService`, disposal within the 2 second cap, and tests that depend on real time instead of `FakeTimeProvider`.
+1. Review milestone 2 (see D16 in `docs/DECISIONS.md` for the choices made where the spec was silent) with the review prompt in `docs/WORKFLOW.md`. Look hardest at threading: overlapping cycles, the mutation lock in `ProfileService`, disposal within the 2 second cap, and tests that depend on real time instead of `FakeTimeProvider`.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Continue with milestones 3, 4 and 5. None of them needs the game.
 
