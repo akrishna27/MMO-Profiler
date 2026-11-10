@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 3 implemented). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 3 reviewed). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -8,7 +8,7 @@ Last updated: 2026-11-09 (milestone 3 implemented). Update this file with every 
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed | Commits `23b811b` and `61e90cd` (review fixes). 107 tests pass on 15 consecutive runs. |
-| 3. Ollama client and response parser | Done, awaiting review | 162 tests pass. Not yet tried against a real Ollama server. |
+| 3. Ollama client and response parser | Done, reviewed | Commit `53972be`. 162 tests pass on 10 consecutive runs. No defects. Not yet tried against a real Ollama server. |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
@@ -18,9 +18,18 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Review milestone 3 with the review prompt in `docs/WORKFLOW.md`. Then try `OllamaClient` against a real Ollama install (nothing has called a real server yet; the request shapes come from the docs).
-2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
-3. Continue with milestones 3, 4 and 5. None of them needs the game.
+1. Start milestone 4 (LiteDB storage) with the implementation prompt in `docs/WORKFLOW.md`.
+2. Smoke-test `OllamaClient` against a real Ollama server (see "Ollama smoke test"). Ollama is installed on the development machine at `D:\Ollama` but the server was not running at review time.
+3. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
+4. Continue with milestone 5. None of them needs the game.
+
+## Ollama smoke test
+
+Nothing has called a real server yet; every request shape comes from the Ollama docs. Before relying on the client, run one classification and one summary against a real model and check:
+
+- The `format` JSON schema is accepted and the reply's `message.content` parses.
+- **Context length.** A full chunk is 20 messages of up to 500 characters plus the schema and the reply. If the model's context window (`num_ctx`) is smaller than the prompt, Ollama is believed to truncate the prompt silently, which would show up as missing ids (labelled `Unknown`), not as an error. This is from memory, not checked. If it happens, set `options.num_ctx` explicitly in `ChatRequest` or lower `ClassificationChunkSize`.
+- Reasoning models may put their thinking in the reply text. A summary must not contain it.
 
 ## Before milestone 6
 
@@ -36,6 +45,10 @@ Minor points that were noted and deliberately left:
 - Messages still waiting in the intake queue when a profile is deleted are processed by the next cycle and recreate it, as if the character had just spoken. Accepted for now; Delete All could also empty the queue.
 - If `DisposeAsync` gives up on a stuck cycle after 2 seconds, that cycle can still finish later and write to the store. In milestone 6 the plugin must tolerate a store call after the database is closed.
 - `Dispose_InFlightCycleIgnoringCancellation_ReturnsAfterTwoSeconds` asserts the wait is under 3 fake seconds while stepping fake time against real scheduling. It has not failed, but if it ever flakes on a loaded machine, widen that upper bound.
+- For milestone 6: `HttpClient.Timeout` defaults to 100 seconds, which silently caps any larger `OllamaTimeout`. The plugin should create the client with `Timeout = Timeout.InfiniteTimeSpan` and let `OllamaClient` enforce the timeout.
+- `CheckHealthAsync` uses the full `OllamaTimeout` (60 seconds by default), so Test Connection against an unreachable remote host can take that long. A short fixed timeout for the health check would be friendlier.
+- A non-2xx reply from `/api/chat` reports only the status code. Including Ollama's `error` text (for example "model not found") would make the status line more useful.
+- If the summariser returns an empty reply, the engine still clears that character's buffered messages although no summary was written.
 - `Normalize_ClampsOutOfRangeValues` checks several values with "at least 1" instead of the exact bound. Tighten when next touching `ProfilerOptionsTests`.
 - `FirstSeenUtc` and `LastSeenUtc` keep the offset the message carried. They compare correctly. The storage layer must normalise to UTC in milestone 4, as the spec says.
 - `CharacterKey` has a public constructor that skips the trimming done by `CharacterKey.Create`. Storage will need the constructor; always use `Create` in application code.
