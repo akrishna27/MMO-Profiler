@@ -144,7 +144,13 @@ public sealed class LiteDbProfileStore : IProfileStore
     private static BsonDocument StringCounts(Dictionary<string, long> counts)
     {
         var doc = new BsonDocument();
-        foreach (var (k, v) in counts) doc[k] = v;
+        foreach (var (k, v) in counts)
+        {
+            // LiteDB throws on a field name containing NUL, and one bad document fails the whole
+            // UpsertMany. Skip such a key so it can never lose a batch (decision D21).
+            if (k.Contains('\0')) continue;
+            doc[k] = v;
+        }
         return doc;
     }
 

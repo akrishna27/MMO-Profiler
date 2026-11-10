@@ -54,7 +54,7 @@ public static class ProfileUpdater
         foreach (var raw in a.Topics ?? Array.Empty<string>())
         {
             if (seen.Count >= MaxTopicsPerMessage) break;
-            var topic = raw?.Trim().ToLowerInvariant();
+            var topic = raw is null ? null : CollapseWhitespace(raw).ToLowerInvariant();
             if (string.IsNullOrEmpty(topic) || topic.Length > MaxTopicLength) continue;
             if (seen.Add(topic)) Increment(p.TopicCounts, topic);
         }
@@ -75,11 +75,30 @@ public static class ProfileUpdater
         ArgumentNullException.ThrowIfNull(p);
         if (summary is null) return;
 
-        // Control characters and whitespace runs (including line breaks) become a single space,
-        // so words on separate lines are not glued together.
-        var sb = new StringBuilder(summary.Length);
+        var cleaned = CollapseWhitespace(summary);
+        if (cleaned.Length > MaxSummaryLength)
+        {
+            var cut = MaxSummaryLength;
+            if (char.IsHighSurrogate(cleaned[cut - 1])) cut--; // do not split a surrogate pair
+            cleaned = cleaned[..cut].TrimEnd();
+        }
+        if (cleaned.Length == 0) return;
+
+        p.Summary = cleaned;
+        p.SummaryUpdatedUtc = now;
+        p.MessagesSinceSummary = 0;
+    }
+
+    /// <summary>
+    /// Replaces every run of control characters and whitespace (including line breaks) with a single
+    /// space and trims both ends, so words on separate lines are not glued together. Topics use it
+    /// too: they become storage field names, which must not contain NUL (decision D21).
+    /// </summary>
+    private static string CollapseWhitespace(string text)
+    {
+        var sb = new StringBuilder(text.Length);
         var pendingSpace = false;
-        foreach (var c in summary)
+        foreach (var c in text)
         {
             if (char.IsControl(c) || char.IsWhiteSpace(c))
             {
@@ -93,19 +112,7 @@ public static class ProfileUpdater
             }
             sb.Append(c);
         }
-
-        var cleaned = sb.ToString();
-        if (cleaned.Length > MaxSummaryLength)
-        {
-            var cut = MaxSummaryLength;
-            if (char.IsHighSurrogate(cleaned[cut - 1])) cut--; // do not split a surrogate pair
-            cleaned = cleaned[..cut].TrimEnd();
-        }
-        if (cleaned.Length == 0) return;
-
-        p.Summary = cleaned;
-        p.SummaryUpdatedUtc = now;
-        p.MessagesSinceSummary = 0;
+        return sb.ToString();
     }
 
     private static void Increment<TKey>(Dictionary<TKey, long> dict, TKey key) where TKey : notnull

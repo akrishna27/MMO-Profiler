@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 4 reviewed; one fix pending). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 4 review fix applied, not pushed). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -9,7 +9,7 @@ Last updated: 2026-11-09 (milestone 4 reviewed; one fix pending). Update this fi
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed, pushed | Commits `23b811b` and `61e90cd` (review fixes). |
 | 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
-| 4. LiteDB storage | Reviewed; one fix pending; not pushed | Commit `7720f68`. LiteDB 5.0.21. 188 tests pass on 10 consecutive runs. Decisions D20 reviewed and accepted. Fix: see "Milestone 4 review fix". |
+| 4. LiteDB storage | Done, reviewed, review fix applied; not pushed | Commits `7720f68`, `9798afe` (review notes) and the NUL fix (D21). LiteDB 5.0.21. 190 tests pass. D20 reviewed and accepted. |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
 | 7. README and CI | Not started | CI should be pulled forward; see below. |
@@ -18,15 +18,9 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Apply the milestone 4 review fix below (Sonnet), then have it checked and push.
+1. Check the milestone 4 NUL fix (D21), then push.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Start milestone 5. None of them needs the game.
-
-## Milestone 4 review fix
-
-Reviewed 2026-11-09. The storage code matches the spec, all 9 required tests exist, and D20's choices and the two spec edits were accepted. One defect, found by probing the real store. Remove this section once it is fixed and checked.
-
-- **A NUL character in a topic loses a whole cycle's saves.** LiteDB throws for a field name containing NUL, and one rejected document fails the entire `UpsertMany`, so none of that cycle's profiles are saved. Topics come from the model and so indirectly from other players' chat. Cause: the spec (topics were never cleaned). Fix: spec sections 5.3 and 8 and decision D21, with two new tests named in section 11 (`ApplyAnalysis_ReplacesControlCharactersInTopics`, `UpsertMany_KeyContainingNul_IsSkipped_AndOtherProfilesAreSaved`).
 
 ## Ollama smoke test results
 

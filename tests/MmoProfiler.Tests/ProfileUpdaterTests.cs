@@ -116,6 +116,20 @@ public class ProfileUpdaterTests
     }
 
     [Fact]
+    public void ApplyAnalysis_ReplacesControlCharactersInTopics()
+    {
+        var p = NewProfile();
+
+        ProfileUpdater.ApplyAnalysis(p, Analysis(
+            topics: new[] { "raid\0night", "  Hard\t\r\n Mode  ", "\0\0", "\u0001" }));
+
+        // NUL and other control characters become a single space; topics that were only control
+        // characters are dropped as empty.
+        Assert.Equal(new[] { "hard mode", "raid night" }, p.TopicCounts.Keys.OrderBy(k => k));
+        Assert.DoesNotContain(p.TopicCounts.Keys, k => k.Any(char.IsControl));
+    }
+
+    [Fact]
     public void ApplyAnalysis_EvictsLowestTopics_WhenOverCap()
     {
         const int cap = ProfileUpdater.MaxTrackedTopics;

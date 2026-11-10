@@ -176,6 +176,27 @@ public class LiteDbStorageTests
     }
 
     [Fact]
+    public void UpsertMany_KeyContainingNul_IsSkipped_AndOtherProfilesAreSaved()
+    {
+        using var storage = LiteDbStorage.OpenInMemory();
+        var bad = FullProfile(TestData.Key("Alice Example"));
+        bad.TopicCounts["bad\0topic"] = 3;
+        bad.LanguageCounts["e\0n"] = 1;
+        var good = FullProfile(TestData.Key("Bob Builder"));
+
+        storage.Profiles.UpsertMany(new[] { bad, good });
+
+        Assert.Equal(2, storage.Profiles.Count());
+        var loadedBad = storage.Profiles.Get(bad.Key)!;
+        // Only the NUL keys are lost; every other field of the profile is saved.
+        Assert.DoesNotContain("bad\0topic", loadedBad.TopicCounts.Keys);
+        Assert.DoesNotContain("e\0n", loadedBad.LanguageCounts.Keys);
+        Assert.Equal(bad.TopicCounts.Where(kv => !kv.Key.Contains('\0')).OrderBy(kv => kv.Key), loadedBad.TopicCounts.OrderBy(kv => kv.Key));
+        Assert.Equal(bad.MessageCount, loadedBad.MessageCount);
+        AssertEquivalent(good, storage.Profiles.Get(good.Key)!);
+    }
+
+    [Fact]
     public void Delete_RemovesProfile()
     {
         using var storage = LiteDbStorage.OpenInMemory();
