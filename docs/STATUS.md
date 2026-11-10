@@ -1,14 +1,14 @@
 # Status
 
-Last updated: 2026-11-09 (context-window fix D19 applied). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestones 1 to 3 reviewed and pushed). Update this file with every change to the codebase.
 
 ## Where things stand
 
 | Milestone | State | Notes |
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
-| 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed | Commits `23b811b` and `61e90cd` (review fixes). 107 tests pass on 15 consecutive runs. |
-| 3. Ollama client and response parser | Done, reviewed | Commit `53972be`. No code defects. Smoke-tested against a real server. The context-window fix (D19) is applied; 167 tests pass. |
+| 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed, pushed | Commits `23b811b` and `61e90cd` (review fixes). |
+| 3. Ollama client and response parser | Done, reviewed, pushed | Commits `53972be` and `c7e6b66` (context-window fix, D19). 167 tests pass on 10 consecutive runs. Verified against a real Ollama server. |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
@@ -22,16 +22,14 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Continue with milestone 5. None of them needs the game.
 
-Done since the last update: the context-window fix. Three new options (`OllamaContextTokens`, `ClassificationChunkMaxChars`, `SummaryMaxInputChars`) with clamps, `num_ctx` on every Ollama request, character-budgeted classification chunks in the engine, a character-budgeted summary prompt in the client, and five new tests. Not yet re-checked against a real Ollama server.
-
 ## Ollama smoke test results
 
 Run 2026-11-09 through the real `OllamaClient` against Ollama 0.40.15, `llama3.2:3b`, RTX 4070 12 GB, model fully on the GPU. The harness was a throwaway program outside the repo. Ollama is installed on the development machine at `D:\Ollama`; the server is not left running.
 
 - **The client works end to end.** Health check, classification with the JSON schema, and summaries all succeeded. No reply failed to parse.
-- **Silent truncation is real** (decision D19). The server's default context was 4096 tokens. A prompt over that was cut to about 2050 tokens with HTTP 200 and no error. Fixed in code (see Next actions); not re-run against the real server.
+- **Silent truncation is real** (decision D19). The server's default context was 4096 tokens. A prompt over that was cut to about 2050 tokens with HTTP 200 and no error. Fixed in `c7e6b66` and re-checked: with `num_ctx` 8192, a worst-case Japanese classification chunk (8 messages, 4000 characters) and a Japanese summary request (30 messages of 500 characters, cut by the client to the newest 6000 characters, 4575 prompt tokens) both ran with no truncation warning in the server log. The loaded model grew from 2.6 GB to 3.1 GB of VRAM.
 - **Speed.** First call 12.6 s (model load). Warm: 8 messages 3.6 s; 20 messages 6.5 to 7.9 s. That is roughly 3 messages a second, so a full cycle of 200 messages takes about 70 s. Summaries took under 1 s.
-- **Label quality is weak.** On 8 realistic messages, intent was clearly wrong on 3: "LF2M healer and tank" was labelled Recruiting, a joke about a wipe was labelled LookingForGroup, and an insult was labelled Trading. Tone was mostly reasonable and German was detected. The sample is tiny; this is what the model evaluation must measure. The prompt gives no definitions of the intents, which is the first thing to try.
+- **Label quality is weak.** On 8 realistic messages, intent was clearly wrong on 3: "LF2M healer and tank" was labelled Recruiting, a joke about a wipe was labelled LookingForGroup, and an insult was labelled Trading. Tone was mostly reasonable and German was detected, but in the re-check Japanese messages were labelled `en`, so language detection is unreliable too. The sample is tiny; this is what the model evaluation must measure. The prompt gives no definitions of the intents, which is the first thing to try.
 - **Injection.** A message telling the model to label everything Friendly did not change the labels of the other messages.
 - **Summary.** 58 words, plain text, no thinking text (this model is not a reasoning model). It contained one factual slip (selling gear described as seeking gear).
 - **Not measured:** the effect on game frame rate while a batch runs. That needs the game.
