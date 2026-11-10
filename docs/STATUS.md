@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-11-09 (milestone 2 reviewed and closed). Update this file with every change to the codebase.
+Last updated: 2026-11-09 (milestone 3 implemented). Update this file with every change to the codebase.
 
 ## Where things stand
 
@@ -8,7 +8,7 @@ Last updated: 2026-11-09 (milestone 2 reviewed and closed). Update this file wit
 |---|---|---|
 | 1. Solution, core domain, `ProfileUpdater`, options | Done, reviewed, pushed | Commits `3b40392`, `a09de8e`. 56 tests pass. |
 | 2. Intake, circuit breaker, summary buffer, profile service, engine | Done, reviewed | Commits `23b811b` and `61e90cd` (review fixes). 107 tests pass on 15 consecutive runs. |
-| 3. Ollama client and response parser | Not started | |
+| 3. Ollama client and response parser | Done, awaiting review | 162 tests pass. Not yet tried against a real Ollama server. |
 | 4. LiteDB storage | Not started | |
 | 5. FFXIV mapping and `ProfileView` | Not started | |
 | 6. Dalamud plugin and windows | Not started | Blocked on the two items under "Before milestone 6". |
@@ -18,7 +18,7 @@ GitHub: <https://github.com/akrishna27/MMO-Profiler>, branch `main`.
 
 ## Next actions
 
-1. Start milestone 3 (Ollama client and response parser) with the implementation prompt in `docs/WORKFLOW.md`.
+1. Review milestone 3 with the review prompt in `docs/WORKFLOW.md`. Then try `OllamaClient` against a real Ollama install (nothing has called a real server yet; the request shapes come from the docs).
 2. Add the GitHub Actions workflow (spec section 13) now instead of waiting for milestone 7, so every push is tested.
 3. Continue with milestones 3, 4 and 5. None of them needs the game.
 

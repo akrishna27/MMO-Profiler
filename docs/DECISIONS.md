@@ -134,3 +134,15 @@ The user then chose to skip the official repository.
 **Alternatives rejected.** A global counter with per-key tombstones grows without bound. Holding the mutation lock for the whole cycle would block the UI's note edits and deletes for as long as the model takes.
 
 **Implementation note (2026-11-09).** The raw log write goes through `ProfileService.AppendToLogAsync`, which holds the mutation lock while it checks the scope, instead of the engine checking `IsDeleted` and then calling the log itself. That closes the gap between the check and the write.
+
+## D18. Milestone 3 choices where the spec was silent (2026-11-09)
+
+**Decision.**
+- `OllamaClient` takes an optional third constructor argument, a `TimeProvider`, used only for the request timeout. Production passes nothing and gets the system clock.
+- For a duplicated result id the parser keeps the first and ignores the rest.
+- `CheckHealthAsync` never throws except for caller cancellation; any failure to get a usable `/api/tags` answer is `ServerUnreachable`. An untagged model name matches `name:latest`.
+- Line breaks in chat text are flattened to spaces in the summary prompt, so a player cannot forge `[Channel]` lines.
+- Chat text in the classification prompt is serialised without escaping non-ASCII characters, so non-English text stays readable to the model.
+
+**Why.** The spec was silent, or in tension with rule 8 (timers need a `TimeProvider`). Each is the smallest reading that keeps the listed tests meaningful.
+
